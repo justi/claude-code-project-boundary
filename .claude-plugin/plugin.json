@@ -1,0 +1,20 @@
+{
+  "name": "project-boundary",
+  "version": "1.0.0",
+  "description": "Blocks destructive commands outside the project directory. Allows file operations within the project (refactoring, cleanup) but prevents accidental damage outside it.",
+  "author": {
+    "name": "Justyna",
+    "url": "https://github.com/justi"
+  },
+  "license": "MIT",
+  "keywords": [
+    "safety",
+    "boundary",
+    "protection",
+    "destructive-commands",
+    "rm",
+    "delete",
+    "project-scope",
+    "dangerously-skip-permissions"
+  ]
+}
