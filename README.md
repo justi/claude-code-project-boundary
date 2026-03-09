@@ -1,67 +1,34 @@
 # Project Boundary — Claude Code Plugin
 
-**Scope-aware protection for Claude Code.** Allows destructive operations within your project (refactoring, cleanup) but blocks them outside the project directory.
+Allows destructive operations (rm, mv, chmod) **within your project** but blocks them **outside** the project directory. Built for `dangerouslySkipPermissions` mode where Claude doesn't ask — this plugin is your safety net.
 
-Built for developers using `dangerouslySkipPermissions` mode who need a safety net without constant permission prompts.
+## How it differs from existing plugins
 
-## Why?
+- **[claude-code-safety-net](https://github.com/kenryu42/claude-code-safety-net)** — blocks `rm` everywhere; Project Boundary allows it inside the project so refactoring works normally.
+- **[destructive-command-guard](https://github.com/Dicklesworthstone/destructive_command_guard)** — only distinguishes `/tmp` vs everything else; Project Boundary uses `$CLAUDE_PROJECT_DIR` as the actual boundary.
+- **[claude-code-damage-control](https://github.com/disler/claude-code-damage-control)** — requires manually listing protected paths; Project Boundary automatically protects everything outside the project.
 
-Existing safety plugins block destructive commands **everywhere** — which breaks normal refactoring workflows. Project Boundary takes a different approach:
+## What it does
 
 | Operation | Inside project | Outside project |
 |-----------|---------------|-----------------|
-| `rm file.rb` | Allowed | **Blocked** |
-| `rm -rf tmp/` | Allowed | **Blocked** |
-| `mv old.rb new.rb` | Allowed | **Blocked** |
-| `chmod 755 script.sh` | Allowed | **Blocked** |
-| `> config.yml` (redirect) | Allowed | **Blocked** |
+| `rm`, `rm -rf` | Allowed | **Blocked** |
+| `mv` | Allowed | **Blocked** |
+| `chmod` / `chown` | Allowed | **Blocked** |
+| `>` redirect | Allowed | **Blocked** |
 | `git push --force` | **Blocked** | **Blocked** |
 | `DROP TABLE` | **Blocked** | **Blocked** |
 | `rails db:drop` | **Blocked** | **Blocked** |
 
 ## Install
 
-### From marketplace (recommended)
-
 ```
-/plugin install project-boundary
+/plugin add justi/claude-code-project-boundary
 ```
-
-### Manual
-
-```
-/plugin add /path/to/claude-code-project-boundary
-```
-
-## What it blocks
-
-### Always blocked (regardless of location)
-- `git push --force` / `-f`
-- `git reset --hard`
-- `git checkout .` / `git clean -f`
-- `DROP TABLE` / `TRUNCATE TABLE`
-- `rails db:drop` / `rails db:reset`
-- `mkfs`, `dd if=`, `format disk`
-
-### Blocked outside project only
-- `rm` / `rm -r` / `rm -rf` — file and directory deletion
-- `mv` — moving files to outside project
-- `>` redirect — writing to files outside project
-- `chmod` / `chown` — changing permissions outside project
 
 ## How it works
 
-A lightweight bash PreToolUse hook that:
-1. Reads the command from Claude's Bash tool input
-2. Checks against always-blocked patterns
-3. For file operations (`rm`, `mv`, `chmod`, `chown`, redirects) — resolves target paths and compares against `$CLAUDE_PROJECT_DIR`
-4. Blocks with exit code 2 if target is outside project, allows with exit code 0 if inside
-
-No dependencies. No Python. No Node. Just bash + jq.
-
-## Configuration
-
-No configuration needed. The plugin automatically uses `$CLAUDE_PROJECT_DIR` set by Claude Code.
+A lightweight bash PreToolUse hook (~70 lines). Resolves target paths and compares against `$CLAUDE_PROJECT_DIR`. No dependencies — just bash + jq.
 
 ## License
 
