@@ -1,5 +1,5 @@
 {
-  "description": "Blocks destructive commands outside project directory, allows them within",
+  "description": "Blocks always-dangerous commands everywhere and file operations outside the project directory",
   "hooks": {
     "PreToolUse": [
       {
