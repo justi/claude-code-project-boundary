@@ -110,10 +110,15 @@ check_single_command() {
   fi
 
   # --- Block cd outside project followed by destructive commands ---
-  if [[ "$CMD" =~ ^cd[[:space:]]+ ]]; then
+  if [[ "$CMD" =~ ^cd($|[[:space:]]) ]]; then
     local cd_target
     cd_target=$(echo "$CMD" | awk '{print $2}')
-    cd_target=$(expand_path "$cd_target")
+    # cd with no args or cd ~ goes to $HOME
+    if [[ -z "$cd_target" || "$cd_target" == "~" ]]; then
+      cd_target="$HOME"
+    else
+      cd_target=$(expand_path "$cd_target")
+    fi
     if [[ "$cd_target" != /* ]]; then
       cd_target="$PROJECT_DIR/$cd_target"
     fi
@@ -136,7 +141,8 @@ check_single_command() {
   fi
 
   # --- Block nested shell execution (bash -c, sh -c, eval) ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])(bash|sh)[[:space:]]+-c[[:space:]]'; then
+  # Match: bash -c, sh -c, bash -lc, bash -ec, /bin/bash -c, /bin/sh -c, /usr/bin/env bash -c
+  if echo "$CMD" | grep -qE '(^|[[:space:]])(/usr/bin/env[[:space:]]+)?(/bin/)?(bash|sh)[[:space:]]+-[a-zA-Z]*c[[:space:]]'; then
     echo "BLOCKED: Nested shell execution ('bash -c' / 'sh -c') cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
   fi
@@ -146,12 +152,36 @@ check_single_command() {
   fi
 
   # --- Block piping to sh/bash (e.g. echo "rm -rf /" | sh) ---
-  if echo "$CMD" | grep -qE '^(sh|bash)$'; then
+  # Match bare shell invocations: sh, bash, /bin/sh, /bin/bash,
+  # and with flags: sh -s, bash --login, etc.
+  # But NOT: bash script.sh, bash -x script.sh (running a script file)
+  if echo "$CMD" | grep -qE '^(/bin/)?(sh|bash)$'; then
     echo "BLOCKED: Piping to 'sh'/'bash' cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
   fi
+  # Match shell with only flags (no script file): sh -s, bash --login, sh -s -- args
+  if echo "$CMD" | grep -qE '^(/bin/)?(sh|bash)[[:space:]]+-'; then
+    # Check if all args are flags (start with -), not a script path
+    local shell_args
+    shell_args=$(echo "$CMD" | sed -E 's|^(/bin/)?(sh\|bash)[[:space:]]+||')
+    local has_script=0
+    for shell_token in $shell_args; do
+      case "$shell_token" in
+        --) break ;;  # everything after -- is args to the script/stdin
+        -*) continue ;;
+        *) has_script=1; break ;;
+      esac
+    done
+    if [[ $has_script -eq 0 ]]; then
+      echo "BLOCKED: Piping to 'sh'/'bash' cannot be safely inspected. Ask user for explicit permission." >&2
+      exit 2
+    fi
+  fi
 
   # --- Always blocked (dangerous regardless of location) ---
+  # Normalize multiple spaces to single space for pattern matching
+  local CMD_NORMALIZED
+  CMD_NORMALIZED=$(echo "$CMD" | sed 's/[[:space:]]\{1,\}/ /g')
   local ALWAYS_BLOCKED=(
     "git push.*--force"
     "git push.*-f($|[[:space:]])"
@@ -171,7 +201,7 @@ check_single_command() {
   )
 
   for pattern in "${ALWAYS_BLOCKED[@]}"; do
-    if echo "$CMD" | grep -qiE "$pattern"; then
+    if echo "$CMD_NORMALIZED" | grep -qiE "$pattern"; then
       echo "BLOCKED: '$CMD' matches dangerous pattern '$pattern'. This command is always blocked. Ask user for explicit permission." >&2
       exit 2
     fi
@@ -193,20 +223,25 @@ check_single_command() {
   # --- find with -delete or -exec rm/mv outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])find($|[[:space:]])'; then
     if echo "$CMD" | grep -qE '(-delete|-exec[[:space:]]+(rm|mv))'; then
-      # Extract the find path (first non-option argument after 'find')
-      # Skip options like -L, -H, -P that come before the path
-      local find_path=""
+      # Extract ALL find paths (non-option arguments after 'find')
+      # Skip options like -L, -H, -P that come before the paths
+      local -a find_paths=()
       local find_args
       find_args=$(echo "$CMD" | sed -E 's/.*find[[:space:]]+//')
+      local past_options=0
       for find_token in $find_args; do
         case "$find_token" in
-          -L|-H|-P|-O*) continue ;;  # find options before path
-          -*) break ;;               # expression starts, no path given
-          *) find_path="$find_token"; break ;;
+          -L|-H|-P|-O*)
+            [[ $past_options -eq 0 ]] && continue
+            break ;;  # expression starts
+          -*)  break ;;  # expression starts
+          *)
+            past_options=1
+            find_paths+=("$find_token") ;;
         esac
       done
-      find_path="${find_path:-.}"
-      if [ -n "$find_path" ]; then
+      [[ ${#find_paths[@]} -eq 0 ]] && find_paths=(".")
+      for find_path in "${find_paths[@]}"; do
         find_path=$(expand_path "$find_path")
         if [[ "$find_path" != /* ]]; then
           find_path="$PROJECT_DIR/$find_path"
@@ -217,7 +252,7 @@ check_single_command() {
           echo "BLOCKED: 'find' with destructive action targets '$resolved_find' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
           exit 2
         fi
-      fi
+      done
     fi
   fi
 
@@ -249,6 +284,19 @@ check_single_command() {
 
   # --- Moving files outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])mv($|[[:space:]])'; then
+    # Check --target-directory=PATH
+    local mv_target_dir
+    mv_target_dir=$(echo "$CMD" | grep -oE '\-\-target-directory=[^ ]+' | sed 's/--target-directory=//' || true)
+    if [ -n "$mv_target_dir" ]; then
+      mv_target_dir=$(expand_path "$mv_target_dir")
+      [[ "$mv_target_dir" != /* ]] && mv_target_dir="$PROJECT_DIR/$mv_target_dir"
+      local resolved_mv_td
+      resolved_mv_td=$(resolve_path "$mv_target_dir")
+      if ! is_inside_project "$resolved_mv_td"; then
+        echo "BLOCKED: 'mv --target-directory' targets '$resolved_mv_td' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
     MV_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])mv[[:space:]]+.*' | sed 's/^[[:space:]]*mv[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
 
     for TARGET in $MV_ARGS; do
@@ -267,6 +315,19 @@ check_single_command() {
 
   # --- cp command: check all non-flag arguments ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])cp($|[[:space:]])'; then
+    # Check --target-directory=PATH
+    local cp_target_dir
+    cp_target_dir=$(echo "$CMD" | grep -oE '\-\-target-directory=[^ ]+' | sed 's/--target-directory=//' || true)
+    if [ -n "$cp_target_dir" ]; then
+      cp_target_dir=$(expand_path "$cp_target_dir")
+      [[ "$cp_target_dir" != /* ]] && cp_target_dir="$PROJECT_DIR/$cp_target_dir"
+      local resolved_cp_td
+      resolved_cp_td=$(resolve_path "$cp_target_dir")
+      if ! is_inside_project "$resolved_cp_td"; then
+        echo "BLOCKED: 'cp --target-directory' targets '$resolved_cp_td' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
     CP_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])cp[[:space:]]+.*' | sed 's/^[[:space:]]*cp[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
 
     for TARGET in $CP_ARGS; do
@@ -369,7 +430,7 @@ check_single_command() {
   fi
 
   # --- Writing to files outside project via redirection (> and >>) ---
-  if echo "$CMD" | grep -qE '>{1,2}[[:space:]]*/|>{1,2}[[:space:]]*~|>{1,2}[[:space:]]*\$HOME|>{1,2}[[:space:]]*"[/~]|>{1,2}[[:space:]]*'"'"'[/~]'; then
+  if echo "$CMD" | grep -qE '>{1,2}[[:space:]]*/|>{1,2}[[:space:]]*~|>{1,2}[[:space:]]*\$HOME|>{1,2}[[:space:]]*"[/~]|>{1,2}[[:space:]]*'"'"'[/~]|>{1,2}[[:space:]]*\.\.'; then
     # Extract redirect targets for both > and >>
     REDIR_TARGET=$(echo "$CMD" | grep -oE '>{1,2}[[:space:]]*[^ ]+' | sed 's/^>*[[:space:]]*//')
     if [ -n "$REDIR_TARGET" ]; then
