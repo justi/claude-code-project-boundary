@@ -389,7 +389,19 @@ check_single_command() {
   # --- Chmod/chown outside project ---
   for CMD_NAME in chmod chown; do
     if echo "$CMD" | grep -qE "(^|[[:space:]])${CMD_NAME}($|[[:space:]])"; then
-      PATHS=$(echo "$CMD" | grep -oE "(^|[[:space:]])${CMD_NAME}[[:space:]]+.*" | sed "s/^[[:space:]]*${CMD_NAME}[[:space:]]*//" | tr ' ' '\n' | grep -v '^-' | grep -v '^[0-9]')
+      # Extract args after command name, skip flags, then skip the first
+      # non-flag token (mode for chmod, owner[:group] for chown)
+      local all_args
+      all_args=$(echo "$CMD" | grep -oE "(^|[[:space:]])${CMD_NAME}[[:space:]]+.*" | sed "s/^[[:space:]]*${CMD_NAME}[[:space:]]*//" | tr ' ' '\n' | grep -v '^-')
+      local skipped_first=0
+      PATHS=""
+      for token in $all_args; do
+        if [[ $skipped_first -eq 0 ]]; then
+          skipped_first=1
+          continue
+        fi
+        PATHS="$PATHS $token"
+      done
       for TARGET in $PATHS; do
         TARGET=$(expand_path "$TARGET")
         if [[ "$TARGET" != /* ]]; then

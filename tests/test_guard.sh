@@ -722,6 +722,17 @@ expect_blocked "chmod on path starting with digit outside project" \
 expect_blocked "chown on path starting with digit outside project" \
   "chown user:group /tmp/42data/file"
 
+# Bug: grep -v '^[0-9]' skips the mode arg, but symbolic modes like u+x
+# don't start with a digit and would be treated as a path
+expect_allowed "chmod with symbolic mode inside project" \
+  "chmod u+x $PROJECT/script.sh"
+
+expect_blocked "chmod with symbolic mode outside project" \
+  "chmod u+x /etc/cron.d/job"
+
+expect_allowed "chmod recursive inside project" \
+  "chmod -R 755 $PROJECT/subdir"
+
 echo ""
 
 # ============================================================
