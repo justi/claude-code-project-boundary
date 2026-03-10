@@ -39,8 +39,8 @@ resolve_path() {
       parts+=("$segment")
     fi
   done
+  local IFS='/'
   local normalized="/${parts[*]}"
-  normalized="${normalized// //}"
   # Walk up to find the nearest existing ancestor directory and resolve symlinks
   local check="$normalized"
   local tail=""
@@ -91,12 +91,6 @@ is_inside_project() {
   return 1
 }
 
-# --- Extract non-flag arguments from a command (skip the command name itself) ---
-extract_path_args() {
-  local cmd_body="$1"
-  echo "$cmd_body" | tr ' ' '\n' | grep -v '^-' || true
-}
-
 # --- Check a single (non-chained) command against all guards ---
 check_single_command() {
   local CMD="$1"
@@ -113,6 +107,48 @@ check_single_command() {
   if [[ "$CMD" =~ ^sudo[[:space:]]+ ]]; then
     CMD="${CMD#sudo }"
     CMD="$(echo "$CMD" | sed 's/^[[:space:]]*//')"
+  fi
+
+  # --- Block cd outside project followed by destructive commands ---
+  if [[ "$CMD" =~ ^cd[[:space:]]+ ]]; then
+    local cd_target
+    cd_target=$(echo "$CMD" | awk '{print $2}')
+    cd_target=$(expand_path "$cd_target")
+    if [[ "$cd_target" != /* ]]; then
+      cd_target="$PROJECT_DIR/$cd_target"
+    fi
+    local resolved_cd
+    resolved_cd=$(resolve_path "$cd_target")
+    if ! is_inside_project "$resolved_cd"; then
+      # cd outside project — flag it so subsequent commands in chain are blocked
+      export _GUARD_CD_OUTSIDE=1
+    fi
+    return 0
+  fi
+
+  # If a previous cd went outside project, block any destructive command
+  if [[ "${_GUARD_CD_OUTSIDE:-0}" == "1" ]]; then
+    local destructive_cmds="rm|mv|cp|ln|chmod|chown|tee|find|curl|wget"
+    if echo "$CMD" | grep -qE "(^|[[:space:]])($destructive_cmds)($|[[:space:]])"; then
+      echo "BLOCKED: Destructive command after 'cd' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+  fi
+
+  # --- Block nested shell execution (bash -c, sh -c, eval) ---
+  if echo "$CMD" | grep -qE '(^|[[:space:]])(bash|sh)[[:space:]]+-c[[:space:]]'; then
+    echo "BLOCKED: Nested shell execution ('bash -c' / 'sh -c') cannot be safely inspected. Ask user for explicit permission." >&2
+    exit 2
+  fi
+  if echo "$CMD" | grep -qE '(^|[[:space:]])eval[[:space:]]'; then
+    echo "BLOCKED: 'eval' cannot be safely inspected. Ask user for explicit permission." >&2
+    exit 2
+  fi
+
+  # --- Block piping to sh/bash (e.g. echo "rm -rf /" | sh) ---
+  if echo "$CMD" | grep -qE '^(sh|bash)$'; then
+    echo "BLOCKED: Piping to 'sh'/'bash' cannot be safely inspected. Ask user for explicit permission." >&2
+    exit 2
   fi
 
   # --- Always blocked (dangerous regardless of location) ---
@@ -157,9 +193,19 @@ check_single_command() {
   # --- find with -delete or -exec rm/mv outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])find($|[[:space:]])'; then
     if echo "$CMD" | grep -qE '(-delete|-exec[[:space:]]+(rm|mv))'; then
-      # Extract the find path (first non-flag argument after 'find')
-      local find_path
-      find_path=$(echo "$CMD" | sed -E 's/.*find[[:space:]]+//' | awk '{print $1}')
+      # Extract the find path (first non-option argument after 'find')
+      # Skip options like -L, -H, -P that come before the path
+      local find_path=""
+      local find_args
+      find_args=$(echo "$CMD" | sed -E 's/.*find[[:space:]]+//')
+      for find_token in $find_args; do
+        case "$find_token" in
+          -L|-H|-P|-O*) continue ;;  # find options before path
+          -*) break ;;               # expression starts, no path given
+          *) find_path="$find_token"; break ;;
+        esac
+      done
+      find_path="${find_path:-.}"
       if [ -n "$find_path" ]; then
         find_path=$(expand_path "$find_path")
         if [[ "$find_path" != /* ]]; then
@@ -323,9 +369,9 @@ check_single_command() {
   fi
 
   # --- Writing to files outside project via redirection (> and >>) ---
-  if echo "$CMD" | grep -qE '>{1,2}\s*/|>{1,2}\s*~|>{1,2}\s*\$HOME|>{1,2}\s*"[/~]|>{1,2}\s*'"'"'[/~]'; then
+  if echo "$CMD" | grep -qE '>{1,2}[[:space:]]*/|>{1,2}[[:space:]]*~|>{1,2}[[:space:]]*\$HOME|>{1,2}[[:space:]]*"[/~]|>{1,2}[[:space:]]*'"'"'[/~]'; then
     # Extract redirect targets for both > and >>
-    REDIR_TARGET=$(echo "$CMD" | grep -oE '>{1,2}\s*[^ ]+' | sed 's/^>*[[:space:]]*//')
+    REDIR_TARGET=$(echo "$CMD" | grep -oE '>{1,2}[[:space:]]*[^ ]+' | sed 's/^>*[[:space:]]*//')
     if [ -n "$REDIR_TARGET" ]; then
       REDIR_TARGET=$(expand_path "$REDIR_TARGET")
       if [[ "$REDIR_TARGET" != /* ]]; then
@@ -365,9 +411,7 @@ check_single_command() {
 # This is a basic splitter that handles common cases.
 split_and_check() {
   local full_cmd="$1"
-
-  # Use awk to split on ;, &&, ||, | while respecting quotes
-  # We replace delimiters with a unique separator, then split
+  export _GUARD_CD_OUTSIDE=0
   local -a subcmds=()
   local current=""
   local in_single_quote=0

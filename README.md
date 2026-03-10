@@ -39,18 +39,29 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `wget -O` / `wget --output-document` | Allowed | **Blocked** |
 | `find -delete` / `find -exec rm` | Allowed | **Blocked** |
 
+### Always blocked (unsafe to inspect)
+
+| Command | Reason |
+|---------|--------|
+| `bash -c "..."` / `sh -c "..."` | Nested shell — cannot inspect inner command |
+| `eval '...'` | Cannot safely parse evaluated code |
+| Piping to `sh` / `bash` | Inner commands invisible to guard |
+| `xargs rm/mv/cp/...` | Arguments cannot be validated |
+
 ### Additional protections
 
 - **Chained commands** — splits on `;`, `&&`, `||`, `|` and checks each sub-command independently
+- **`cd` tracking** — `cd /tmp && rm -rf something` is blocked because `cd` left the project
 - **`sudo` prefix** — stripped before checking, so `sudo rm /etc/passwd` is still blocked
-- **`xargs` with dangerous commands** — `xargs rm`, `xargs mv`, `xargs cp`, etc. are always blocked (arguments cannot be validated)
+- **`find` options** — handles `-L`, `-H`, `-P` before the search path
 - **Path traversal** — `..` segments are resolved before boundary check
 - **`~` and `$HOME` expansion** — `rm ~/file` and `rm $HOME/file` are correctly detected as outside-project
+- **Symlink resolution** — handles macOS `/var` → `/private/var` and similar
 
 ### Known limitations
 
-- Paths with spaces inside quotes are split on whitespace — works in practice but not via true shell parsing
-- `eval`, backtick substitution, and `$()` subshells are not inspected
+- Paths with spaces in project directory name are not fully supported (space-based argument splitting)
+- `$()` subshells and backtick substitution inside arguments are not expanded
 
 ## Install
 
@@ -74,7 +85,7 @@ A pure-bash PreToolUse hook. Splits chained commands, resolves target paths (han
 bash tests/test_guard.sh
 ```
 
-109 tests covering all guard scenarios. CI runs on Ubuntu and macOS.
+125 tests covering all guard scenarios. CI runs on Ubuntu and macOS.
 
 ## License
 
