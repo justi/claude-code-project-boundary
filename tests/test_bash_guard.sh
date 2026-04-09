@@ -795,3 +795,28 @@ expect_allowed_cwd "mv file with cwd=project" \
   "mv a.txt b.txt" "$PROJECT"
 
 echo ""
+
+# ============================================================
+# 47. Previously always-blocked commands are now allowed inside project
+# ============================================================
+echo "--- Removed global blocks (regression guard) ---"
+
+expect_allowed "git push --force (inside project)" \
+  "git push --force origin main"
+
+expect_allowed "git reset --hard (inside project)" \
+  "git reset --hard HEAD~1"
+
+expect_allowed "git checkout . (inside project)" \
+  "git checkout ."
+
+expect_allowed "git clean -fd (inside project)" \
+  "git clean -fd"
+
+expect_allowed "rails db:drop (inside project)" \
+  "rails db:drop"
+
+expect_allowed "rake db:reset (inside project)" \
+  "rake db:reset"
+
+echo ""
