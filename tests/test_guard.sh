@@ -923,7 +923,8 @@ expect_file_blocked "Edit file in home dir" \
 expect_file_blocked "Edit with .. escaping project" \
   "$PROJECT/../../../etc/passwd"
 
-# Tilde and $HOME
+# Tilde and $HOME (defense-in-depth: Claude Code sends absolute paths,
+# but we guard against these in case the contract changes)
 expect_file_blocked "Edit ~/file" \
   "~/file.txt"
 
@@ -1023,6 +1024,38 @@ expect_file_blocked "Write /var/tmp/file" \
 # Empty-ish paths
 expect_file_allowed "Edit with . (current dir = project)" \
   "."
+
+echo ""
+
+# ============================================================
+# 49. Symlink bypass — Edit/Write must dereference symlinks
+# ============================================================
+echo "--- Symlink bypass (Edit/Write) ---"
+
+# Create a file outside the project and symlink to it from inside
+OUTSIDE_FILE="$TMPDIR_BASE/outside_secret.txt"
+echo "secret" > "$OUTSIDE_FILE"
+ln -s "$OUTSIDE_FILE" "$PROJECT/symlink_to_outside.txt"
+
+expect_file_blocked "Edit symlink pointing outside project" \
+  "$PROJECT/symlink_to_outside.txt"
+
+expect_file_blocked "Write symlink pointing outside project" \
+  "$PROJECT/symlink_to_outside.txt"
+
+# Symlink to file inside project — should be allowed
+ln -s "$PROJECT/subdir" "$PROJECT/link_to_subdir"
+expect_file_allowed "Edit symlink pointing inside project" \
+  "$PROJECT/link_to_subdir/file.txt"
+
+# Symlink chain: project/a -> project/b -> /tmp/outside
+OUTSIDE_FILE2="$TMPDIR_BASE/outside2.txt"
+echo "secret2" > "$OUTSIDE_FILE2"
+ln -s "$OUTSIDE_FILE2" "$PROJECT/subdir/chain_end"
+ln -s "$PROJECT/subdir/chain_end" "$PROJECT/chain_start"
+
+expect_file_blocked "Edit chained symlink escaping project" \
+  "$PROJECT/chain_start"
 
 echo ""
 
