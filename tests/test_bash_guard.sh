@@ -820,6 +820,21 @@ expect_allowed_cwd "git status with cwd=/tmp (safe)" \
 expect_allowed_cwd "git log with cwd=/tmp (safe)" \
   "git log" "/tmp"
 
+# cd back into project from outside cwd — should allow
+expect_allowed_cwd "cd to project && rm file (cwd=/tmp)" \
+  "cd $PROJECT && rm file.txt" "/tmp"
+
+expect_allowed_cwd "cd to project && git clean (cwd=/tmp)" \
+  "cd $PROJECT && git clean -fd" "/tmp"
+
+# dd with cwd outside — of= inside project should be allowed
+expect_allowed_cwd "dd of= inside project (cwd=/tmp)" \
+  "dd if=/dev/zero of=$PROJECT/file.bin bs=1M count=1" "/tmp"
+
+# dd with cwd outside — of= outside project should be blocked
+expect_blocked_cwd "dd of=/etc/file (cwd=/tmp)" \
+  "dd if=/dev/zero of=/etc/file bs=1M count=1" "/tmp"
+
 echo ""
 
 # ============================================================

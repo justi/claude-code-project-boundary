@@ -188,9 +188,13 @@ check_single_command() {
     fi
     local resolved_cd
     resolved_cd=$(resolve_path "$cd_target")
+    EFFECTIVE_CWD="$resolved_cd"
     if ! is_inside_project "$resolved_cd"; then
-      # cd outside project — flag it so subsequent commands in chain are blocked
       export _GUARD_CD_OUTSIDE=1
+      CWD_OUTSIDE_PROJECT=1
+    else
+      export _GUARD_CD_OUTSIDE=0
+      CWD_OUTSIDE_PROJECT=0
     fi
     return 0
   fi
@@ -203,7 +207,7 @@ check_single_command() {
   fi
 
   if [[ "$outside_context" == "1" ]]; then
-    local destructive_cmds="rm|mv|cp|ln|chmod|chown|tee|find|curl|wget|dd"
+    local destructive_cmds="rm|mv|cp|ln|chmod|chown|tee|find|curl|wget"
     if echo "$CMD" | grep -qE "(^|[[:space:]])($destructive_cmds)($|[[:space:]])"; then
       echo "BLOCKED: Destructive command outside project directory. Ask user for explicit permission." >&2
       exit 2
@@ -483,7 +487,7 @@ check_single_command() {
   # --- dd of= outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])dd($|[[:space:]])'; then
     local dd_output=""
-    dd_output=$(echo "$CMD" | grep -oE 'of=[^ ]+' | sed 's/^of=//')
+    dd_output=$(echo "$CMD" | grep -oE 'of=[^ ]+' | sed 's/^of=//' || true)
     if [ -n "$dd_output" ]; then
       dd_output=$(expand_path "$dd_output")
       if [[ "$dd_output" != /* ]]; then
