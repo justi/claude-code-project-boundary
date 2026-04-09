@@ -860,7 +860,7 @@ echo ""
 # ============================================================
 echo "--- Edit tool (guard_file.sh) ---"
 
-GUARD_FILE="$SCRIPT_DIR/../hooks/guard_file.sh"
+GUARD_FILE="$GUARD"
 
 run_guard_file() {
   local file_path="$1"

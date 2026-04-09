@@ -3,8 +3,9 @@ set -euo pipefail
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 
-if [ -z "$COMMAND" ]; then
+if [ -z "$COMMAND" ] && [ -z "$FILE_PATH" ]; then
   exit 0
 fi
 
@@ -90,6 +91,20 @@ is_inside_project() {
   fi
   return 1
 }
+
+# --- Edit/Write tool: check file_path boundary ---
+if [ -n "$FILE_PATH" ]; then
+  FILE_PATH=$(expand_path "$FILE_PATH")
+  if [[ "$FILE_PATH" != /* ]]; then
+    FILE_PATH="$PROJECT_DIR/$FILE_PATH"
+  fi
+  RESOLVED=$(resolve_path "$FILE_PATH")
+  if ! is_inside_project "$RESOLVED"; then
+    echo "BLOCKED: File '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+    exit 2
+  fi
+  exit 0
+fi
 
 # --- Check a single (non-chained) command against all guards ---
 check_single_command() {
