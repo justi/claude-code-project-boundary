@@ -104,20 +104,19 @@ if [ -n "$FILE_PATH" ]; then
     FILE_PATH="$PROJECT_DIR/$FILE_PATH"
   fi
   RESOLVED=$(resolve_path "$FILE_PATH")
-  # If the path exists, fully dereference symlinks so a symlink inside the
-  # project pointing outside is caught (e.g. project/link -> /tmp/secret).
-  if [[ -e "$RESOLVED" || -L "$RESOLVED" ]]; then
-    RESOLVED=$(cd "$(dirname "$RESOLVED")" && pwd -P)/$(basename "$RESOLVED")
-    # Dereference the final component if it is itself a symlink
-    if [[ -L "$RESOLVED" ]]; then
-      link_target=$(readlink "$RESOLVED")
-      if [[ "$link_target" == /* ]]; then
-        RESOLVED=$(resolve_path "$link_target")
-      else
-        RESOLVED=$(resolve_path "$(dirname "$RESOLVED")/$link_target")
-      fi
+  # Fully dereference symlinks so a symlink inside the project pointing
+  # outside is caught (e.g. project/link -> /tmp/secret).
+  # Loop handles chained symlinks (a -> b -> /outside).
+  max_depth=20
+  while [[ -L "$RESOLVED" && $max_depth -gt 0 ]]; do
+    link_target=$(readlink "$RESOLVED")
+    if [[ "$link_target" == /* ]]; then
+      RESOLVED=$(resolve_path "$link_target")
+    else
+      RESOLVED=$(resolve_path "$(dirname "$RESOLVED")/$link_target")
     fi
-  fi
+    max_depth=$((max_depth - 1))
+  done
   if ! is_inside_project "$RESOLVED"; then
     echo "BLOCKED: File '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
     exit 2
