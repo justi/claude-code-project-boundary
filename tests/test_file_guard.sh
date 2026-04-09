@@ -173,4 +173,15 @@ ln -s "$PROJECT/subdir/chain_end" "$PROJECT/chain_start"
 expect_file_blocked "Edit chained symlink escaping project" \
   "$PROJECT/chain_start"
 
+# Symlink chain exceeding max_depth (>20 hops) — must block (fail-closed)
+DEEP_OUTSIDE="$TMPDIR_BASE/deep_outside.txt"
+echo "deep" > "$DEEP_OUTSIDE"
+prev="$DEEP_OUTSIDE"
+for i in $(seq 1 25); do
+  ln -s "$prev" "$PROJECT/deep_link_$i"
+  prev="$PROJECT/deep_link_$i"
+done
+expect_file_blocked "Edit symlink chain >20 hops (fail-closed)" \
+  "$prev"
+
 echo ""

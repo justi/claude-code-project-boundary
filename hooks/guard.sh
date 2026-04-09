@@ -117,6 +117,11 @@ if [ -n "$FILE_PATH" ]; then
     fi
     max_depth=$((max_depth - 1))
   done
+  # Fail-closed: if symlink chain is too deep or circular, block
+  if [[ -L "$RESOLVED" ]]; then
+    echo "BLOCKED: Symlink chain too deep or circular at '$RESOLVED'. Ask user for explicit permission." >&2
+    exit 2
+  fi
   # Canonicalize the final path (resolve /var -> /private/var on macOS)
   if [[ -e "$RESOLVED" ]]; then
     RESOLVED="$(cd "$(dirname "$RESOLVED")" && pwd -P)/$(basename "$RESOLVED")"
