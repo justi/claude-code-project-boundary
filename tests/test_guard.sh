@@ -874,13 +874,15 @@ expect_file_blocked() {
   local description="$1"
   local file_path="$2"
   TOTAL=$((TOTAL + 1))
-  if run_guard_file "$file_path"; then
-    echo "FAIL: $description -- expected BLOCKED but got ALLOWED"
-    echo "      file_path: $file_path"
-    FAIL=$((FAIL + 1))
-  else
+  run_guard_file "$file_path"
+  local rc=$?
+  if [ "$rc" -eq 2 ]; then
     echo "PASS: $description"
     PASS=$((PASS + 1))
+  else
+    echo "FAIL: $description -- expected BLOCKED (exit 2) but got exit $rc"
+    echo "      file_path: $file_path"
+    FAIL=$((FAIL + 1))
   fi
 }
 
@@ -888,11 +890,13 @@ expect_file_allowed() {
   local description="$1"
   local file_path="$2"
   TOTAL=$((TOTAL + 1))
-  if run_guard_file "$file_path"; then
+  run_guard_file "$file_path"
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
     echo "PASS: $description"
     PASS=$((PASS + 1))
   else
-    echo "FAIL: $description -- expected ALLOWED but got BLOCKED"
+    echo "FAIL: $description -- expected ALLOWED (exit 0) but got exit $rc"
     echo "      file_path: $file_path"
     FAIL=$((FAIL + 1))
   fi

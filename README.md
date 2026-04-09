@@ -80,7 +80,7 @@ From marketplace:
 
 ## How it works
 
-Pure-bash PreToolUse hooks for Bash, Edit, and Write tools. Splits chained commands, resolves target paths (handling symlinks, `..`, `~`, `$HOME`), and compares against `$CLAUDE_PROJECT_DIR`. Dependencies: bash + jq.
+Pure-bash PreToolUse hooks for Bash, Edit, and Write tools. The Bash hook splits chained commands and resolves target paths (handling symlinks, `..`, `~`, `$HOME`); the Edit and Write hooks perform file path boundary checks against `$CLAUDE_PROJECT_DIR`. Dependencies: bash + jq.
 
 ## Testing
 
