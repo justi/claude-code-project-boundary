@@ -3,8 +3,9 @@ set -euo pipefail
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 
-if [ -z "$COMMAND" ]; then
+if [ -z "$COMMAND" ] && [ -z "$FILE_PATH" ]; then
   exit 0
 fi
 
@@ -40,7 +41,12 @@ resolve_path() {
     fi
   done
   local IFS='/'
-  local normalized="/${parts[*]}"
+  local normalized
+  if [[ ${#parts[@]} -eq 0 ]]; then
+    normalized="/"
+  else
+    normalized="/${parts[*]}"
+  fi
   # Walk up to find the nearest existing ancestor directory and resolve symlinks
   local check="$normalized"
   local tail=""
@@ -90,6 +96,42 @@ is_inside_project() {
   fi
   return 1
 }
+
+# --- Edit/Write tool: check file_path boundary ---
+if [ -n "$FILE_PATH" ]; then
+  FILE_PATH=$(expand_path "$FILE_PATH")
+  if [[ "$FILE_PATH" != /* ]]; then
+    FILE_PATH="$PROJECT_DIR/$FILE_PATH"
+  fi
+  RESOLVED=$(resolve_path "$FILE_PATH")
+  # Fully dereference symlinks so a symlink inside the project pointing
+  # outside is caught (e.g. project/link -> /tmp/secret).
+  # Loop handles chained symlinks (a -> b -> /outside).
+  max_depth=20
+  while [[ -L "$RESOLVED" && $max_depth -gt 0 ]]; do
+    link_target=$(readlink "$RESOLVED")
+    if [[ "$link_target" == /* ]]; then
+      RESOLVED=$(resolve_path "$link_target")
+    else
+      RESOLVED=$(resolve_path "$(dirname "$RESOLVED")/$link_target")
+    fi
+    max_depth=$((max_depth - 1))
+  done
+  # Fail-closed: if symlink chain is too deep or circular, block
+  if [[ -L "$RESOLVED" ]]; then
+    echo "BLOCKED: Symlink chain too deep or circular at '$RESOLVED'. Ask user for explicit permission." >&2
+    exit 2
+  fi
+  # Canonicalize the final path (resolve /var -> /private/var on macOS)
+  if [[ -e "$RESOLVED" ]]; then
+    RESOLVED="$(cd "$(dirname "$RESOLVED")" && pwd -P)/$(basename "$RESOLVED")"
+  fi
+  if ! is_inside_project "$RESOLVED"; then
+    echo "BLOCKED: File '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+    exit 2
+  fi
+  exit 0
+fi
 
 # --- Check a single (non-chained) command against all guards ---
 check_single_command() {

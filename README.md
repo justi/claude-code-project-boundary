@@ -38,6 +38,9 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `curl -o` / `curl --output` | Allowed | **Blocked** |
 | `wget -O` / `wget --output-document` | Allowed | **Blocked** |
 | `find -delete` / `find -exec rm` | Allowed | **Blocked** |
+| **Edit** tool (file edits) | Allowed | **Blocked** |
+| **MultiEdit** tool (multi-file edits) | Allowed | **Blocked** |
+| **Write** tool (file creation) | Allowed | **Blocked** |
 
 ### Always blocked (unsafe to inspect)
 
@@ -56,7 +59,7 @@ Allows destructive operations **within your project** but blocks them **outside*
 - **`find` options** — handles `-L`, `-H`, `-P` before the search path
 - **Path traversal** — `..` segments are resolved before boundary check
 - **`~` and `$HOME` expansion** — `rm ~/file` and `rm $HOME/file` are correctly detected as outside-project
-- **Symlink resolution** — handles macOS `/var` → `/private/var` and similar
+- **Symlink resolution** — handles macOS `/var` → `/private/var`, dereferences symlink chains in Edit/Write/MultiEdit (fail-closed after 20 hops)
 
 ### Known limitations
 
@@ -78,7 +81,7 @@ From marketplace:
 
 ## How it works
 
-A pure-bash PreToolUse hook. Splits chained commands, resolves target paths (handling symlinks, `..`, `~`, `$HOME`), and compares against `$CLAUDE_PROJECT_DIR`. Dependencies: bash + jq.
+Pure-bash PreToolUse hooks for Bash, Edit, MultiEdit, and Write tools. The Bash hook splits chained commands and resolves target paths (handling symlinks, `..`, `~`, `$HOME`); the Edit, MultiEdit, and Write hooks perform file path boundary checks against `$CLAUDE_PROJECT_DIR`. Dependencies: bash + jq.
 
 ## Testing
 
@@ -86,7 +89,7 @@ A pure-bash PreToolUse hook. Splits chained commands, resolves target paths (han
 bash tests/test_guard.sh
 ```
 
-125 tests covering all guard scenarios. CI runs on Ubuntu and macOS.
+Full test suite covering all guard scenarios. CI runs on Ubuntu and macOS.
 
 ## License
 
