@@ -40,7 +40,7 @@ Allows destructive operations **within your project** but blocks them **outside*
 ### Additional protections
 
 - **Chained commands** — splits on `;`, `&&`, `||`, `|` and checks each sub-command independently
-- **`cd` tracking** — `cd /tmp && rm -rf something` is blocked because `cd` left the project
+- **`cd` tracking** — `cd /tmp && rm -rf something` is blocked because `cd` left the project; also blocks `git`, `rails`, `rake` after `cd` outside
 - **`sudo` prefix** — stripped before checking, so `sudo rm /etc/passwd` is still blocked
 - **`find` options** — handles `-L`, `-H`, `-P` before the search path
 - **Path traversal** — `..` segments are resolved before boundary check
