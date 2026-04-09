@@ -38,6 +38,8 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `curl -o` / `curl --output` | Allowed | **Blocked** |
 | `wget -O` / `wget --output-document` | Allowed | **Blocked** |
 | `find -delete` / `find -exec rm` | Allowed | **Blocked** |
+| **Edit** tool (file edits) | Allowed | **Blocked** |
+| **Write** tool (file creation) | Allowed | **Blocked** |
 
 ### Always blocked (unsafe to inspect)
 
@@ -78,7 +80,7 @@ From marketplace:
 
 ## How it works
 
-A pure-bash PreToolUse hook. Splits chained commands, resolves target paths (handling symlinks, `..`, `~`, `$HOME`), and compares against `$CLAUDE_PROJECT_DIR`. Dependencies: bash + jq.
+Pure-bash PreToolUse hooks for Bash, Edit, and Write tools. Splits chained commands, resolves target paths (handling symlinks, `..`, `~`, `$HOME`), and compares against `$CLAUDE_PROJECT_DIR`. Dependencies: bash + jq.
 
 ## Testing
 
@@ -86,7 +88,7 @@ A pure-bash PreToolUse hook. Splits chained commands, resolves target paths (han
 bash tests/test_guard.sh
 ```
 
-125 tests covering all guard scenarios. CI runs on Ubuntu and macOS.
+163 tests covering all guard scenarios. CI runs on Ubuntu and macOS.
 
 ## License
 

@@ -856,6 +856,103 @@ expect_blocked "git push  --force (extra space)" \
 echo ""
 
 # ============================================================
+# 46. Edit tool — file_path boundary check
+# ============================================================
+echo "--- Edit tool (guard_file.sh) ---"
+
+GUARD_FILE="$SCRIPT_DIR/../hooks/guard_file.sh"
+
+run_guard_file() {
+  local file_path="$1"
+  local json
+  json=$(jq -n --arg f "$file_path" '{"tool_input": {"file_path": $f}}')
+  echo "$json" | bash "$GUARD_FILE" 2>/dev/null
+  return $?
+}
+
+expect_file_blocked() {
+  local description="$1"
+  local file_path="$2"
+  TOTAL=$((TOTAL + 1))
+  if run_guard_file "$file_path"; then
+    echo "FAIL: $description -- expected BLOCKED but got ALLOWED"
+    echo "      file_path: $file_path"
+    FAIL=$((FAIL + 1))
+  else
+    echo "PASS: $description"
+    PASS=$((PASS + 1))
+  fi
+}
+
+expect_file_allowed() {
+  local description="$1"
+  local file_path="$2"
+  TOTAL=$((TOTAL + 1))
+  if run_guard_file "$file_path"; then
+    echo "PASS: $description"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: $description -- expected ALLOWED but got BLOCKED"
+    echo "      file_path: $file_path"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# Inside project — should be allowed
+expect_file_allowed "Edit file inside project" \
+  "$PROJECT/file.txt"
+
+expect_file_allowed "Edit file in project subdir" \
+  "$PROJECT/subdir/file.txt"
+
+# Outside project — should be blocked
+expect_file_blocked "Edit file in /tmp" \
+  "/tmp/file.txt"
+
+expect_file_blocked "Edit file in /etc" \
+  "/etc/passwd"
+
+expect_file_blocked "Edit file in home dir" \
+  "$HOME/.bashrc"
+
+# Path traversal
+expect_file_blocked "Edit with .. escaping project" \
+  "$PROJECT/../../../etc/passwd"
+
+# Tilde and $HOME
+expect_file_blocked "Edit ~/file" \
+  "~/file.txt"
+
+expect_file_blocked 'Edit $HOME/file' \
+  '$HOME/file.txt'
+
+# Project root itself — allowed (editing a file at project root is fine)
+expect_file_allowed "Edit file at project root" \
+  "$PROJECT/README.md"
+
+echo ""
+
+# ============================================================
+# 47. Write tool — file_path boundary check
+# ============================================================
+echo "--- Write tool (guard_file.sh) ---"
+
+# Write uses the same guard_file.sh, same checks apply
+expect_file_allowed "Write file inside project" \
+  "$PROJECT/new_file.txt"
+
+expect_file_blocked "Write file in /tmp" \
+  "/tmp/new_file.txt"
+
+expect_file_blocked "Write file in /etc" \
+  "/etc/crontab"
+
+expect_file_blocked "Write with .. escaping project" \
+  "$PROJECT/../../outside.txt"
+
+echo ""
+
+# ============================================================
 # Cleanup and summary
 # ============================================================
 rm -rf "$TMPDIR_BASE"
