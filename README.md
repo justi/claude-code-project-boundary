@@ -88,7 +88,7 @@ Pure-bash PreToolUse hooks for Bash, Edit, and Write tools. The Bash hook splits
 bash tests/test_guard.sh
 ```
 
-180 tests covering all guard scenarios. CI runs on Ubuntu and macOS.
+Full test suite covering all guard scenarios. CI runs on Ubuntu and macOS.
 
 ## License
 

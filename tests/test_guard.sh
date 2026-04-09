@@ -858,15 +858,15 @@ echo ""
 # ============================================================
 # 46. Edit tool — file_path boundary check
 # ============================================================
-echo "--- Edit tool (guard_file.sh) ---"
+echo "--- Edit tool (guard.sh file_path) ---"
 
-GUARD_FILE="$GUARD"
+# Edit/Write tools use the same guard.sh, which detects file_path in the input
 
 run_guard_file() {
   local file_path="$1"
   local json
   json=$(jq -n --arg f "$file_path" '{"tool_input": {"file_path": $f}}')
-  echo "$json" | bash "$GUARD_FILE" 2>/dev/null
+  echo "$json" | bash "$GUARD" 2>/dev/null
   return $?
 }
 
@@ -939,9 +939,9 @@ echo ""
 # ============================================================
 # 47. Write tool — file_path boundary check
 # ============================================================
-echo "--- Write tool (guard_file.sh) ---"
+echo "--- Write tool (guard.sh file_path) ---"
 
-# Write uses the same guard_file.sh, same checks apply
+# Write uses the same guard.sh, same file_path checks apply
 expect_file_allowed "Write file inside project" \
   "$PROJECT/new_file.txt"
 
