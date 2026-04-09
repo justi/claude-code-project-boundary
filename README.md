@@ -70,9 +70,10 @@ Direct:
 claude --plugin-dir /path/to/claude-code-project-boundary
 ```
 
-From marketplace (after adding cc-marketplace or buildwithclaude):
+From marketplace:
 ```
-/plugin install project-boundary@cc-marketplace
+/plugin marketplace add davepoon/buildwithclaude
+/plugin install project-boundary@buildwithclaude
 ```
 
 ## How it works
