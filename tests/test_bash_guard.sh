@@ -589,6 +589,19 @@ expect_blocked "cd /tmp && rails db:drop" \
 expect_blocked "cd /tmp && rake db:reset" \
   "cd /tmp && rake db:reset"
 
+# safe git/rails/rake after cd outside — allowed
+expect_allowed "cd /tmp && git status (safe)" \
+  "cd /tmp && git status"
+
+expect_allowed "cd /tmp && git log (safe)" \
+  "cd /tmp && git log"
+
+expect_allowed "cd /tmp && rails routes (safe)" \
+  "cd /tmp && rails routes"
+
+expect_allowed "cd /tmp && rake -T (safe)" \
+  "cd /tmp && rake -T"
+
 # git inside project — allowed
 expect_allowed "cd to project && git status" \
   "cd $PROJECT && git status"
@@ -747,5 +760,38 @@ expect_blocked "mv -t /tmp" \
   "mv -t /tmp $PROJECT/file.txt"
 
 echo ""
+
+# ============================================================
+# 45. dd of= boundary check
+# ============================================================
+echo "--- dd of= boundary check ---"
+
+expect_blocked "dd of=/etc/file" \
+  "dd if=/dev/zero of=/etc/file bs=1M count=1"
+
+expect_allowed "dd of= inside project" \
+  "dd if=/dev/zero of=$PROJECT/file.bin bs=1M count=1"
+
+expect_blocked "dd of=~/file" \
+  "dd if=/dev/zero of=~/file bs=1M"
+
+echo ""
+
+# ============================================================
+# 46. cwd from hook event payload
+# ============================================================
+echo "--- cwd from hook event ---"
+
+expect_blocked_cwd "rm relative file with cwd=/tmp" \
+  "rm relative.txt" "/tmp"
+
+expect_allowed_cwd "rm relative file with cwd=project" \
+  "rm relative.txt" "$PROJECT"
+
+expect_blocked_cwd "mv file with cwd=/tmp" \
+  "mv a.txt b.txt" "/tmp"
+
+expect_allowed_cwd "mv file with cwd=project" \
+  "mv a.txt b.txt" "$PROJECT"
 
 echo ""
