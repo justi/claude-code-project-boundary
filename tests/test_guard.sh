@@ -953,6 +953,76 @@ expect_file_blocked "Write with .. escaping project" \
 echo ""
 
 # ============================================================
+# 48. Edit/Write edge cases
+# ============================================================
+echo "--- Edit/Write edge cases ---"
+
+# Root path
+expect_file_blocked "Edit root path /" \
+  "/"
+
+# Path prefix collision: project-evil vs project
+expect_file_blocked "Write to project-evil (prefix collision)" \
+  "${PROJECT}-evil/file.txt"
+
+# Sensitive dotfiles
+expect_file_blocked "Edit ~/.ssh/authorized_keys" \
+  "$HOME/.ssh/authorized_keys"
+
+expect_file_blocked "Edit ~/.gitconfig" \
+  "$HOME/.gitconfig"
+
+expect_file_blocked "Write ~/.ssh/id_rsa" \
+  "$HOME/.ssh/id_rsa"
+
+# System paths
+expect_file_blocked "Write /etc/crontab" \
+  "/etc/crontab"
+
+expect_file_blocked "Edit /etc/hosts" \
+  "/etc/hosts"
+
+# Device paths
+expect_file_blocked "Write /dev/null" \
+  "/dev/null"
+
+# Relative path (should resolve inside project)
+expect_file_allowed "Edit relative path inside project" \
+  "file.txt"
+
+expect_file_allowed "Edit ./subdir/file.txt" \
+  "./subdir/file.txt"
+
+# Relative path traversal escaping project
+expect_file_blocked "Edit relative ../../etc/passwd" \
+  "../../etc/passwd"
+
+# ${HOME} expansion
+expect_file_blocked 'Edit ${HOME}/.bashrc' \
+  '${HOME}/.bashrc'
+
+# Dotfiles inside project — allowed
+expect_file_allowed "Edit .env inside project" \
+  "$PROJECT/.env"
+
+expect_file_allowed "Edit .gitignore inside project" \
+  "$PROJECT/.gitignore"
+
+# Deep path traversal
+expect_file_blocked "Edit deep traversal" \
+  "$PROJECT/a/b/c/../../../../etc/passwd"
+
+# macOS /private/tmp vs /tmp
+expect_file_blocked "Write /var/tmp/file" \
+  "/var/tmp/file"
+
+# Empty-ish paths
+expect_file_allowed "Edit with . (current dir = project)" \
+  "."
+
+echo ""
+
+# ============================================================
 # Cleanup and summary
 # ============================================================
 rm -rf "$TMPDIR_BASE"

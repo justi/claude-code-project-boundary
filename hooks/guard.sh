@@ -41,7 +41,12 @@ resolve_path() {
     fi
   done
   local IFS='/'
-  local normalized="/${parts[*]}"
+  local normalized
+  if [[ ${#parts[@]} -eq 0 ]]; then
+    normalized="/"
+  else
+    normalized="/${parts[*]}"
+  fi
   # Walk up to find the nearest existing ancestor directory and resolve symlinks
   local check="$normalized"
   local tail=""
