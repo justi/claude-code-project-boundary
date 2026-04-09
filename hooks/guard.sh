@@ -175,7 +175,7 @@ check_single_command() {
 
   # If a previous cd went outside project, block any destructive command
   if [[ "${_GUARD_CD_OUTSIDE:-0}" == "1" ]]; then
-    local destructive_cmds="rm|mv|cp|ln|chmod|chown|tee|find|curl|wget"
+    local destructive_cmds="rm|mv|cp|ln|chmod|chown|tee|find|curl|wget|git|rails|rake"
     if echo "$CMD" | grep -qE "(^|[[:space:]])($destructive_cmds)($|[[:space:]])"; then
       echo "BLOCKED: Destructive command after 'cd' outside project directory. Ask user for explicit permission." >&2
       exit 2

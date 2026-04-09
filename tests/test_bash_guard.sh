@@ -573,6 +573,26 @@ expect_blocked "cd /tmp && rm -rf something" \
 expect_allowed "cd to project subdir && rm file" \
   "cd $PROJECT/subdir && rm file.txt"
 
+# git/rails/rake after cd outside project
+expect_blocked "cd /tmp && git clean -fd" \
+  "cd /tmp && git clean -fd"
+
+expect_blocked "cd /tmp && git checkout ." \
+  "cd /tmp && git checkout ."
+
+expect_blocked "cd /tmp && git reset --hard" \
+  "cd /tmp && git reset --hard HEAD~1"
+
+expect_blocked "cd /tmp && rails db:drop" \
+  "cd /tmp && rails db:drop"
+
+expect_blocked "cd /tmp && rake db:reset" \
+  "cd /tmp && rake db:reset"
+
+# git inside project — allowed
+expect_allowed "cd to project && git status" \
+  "cd $PROJECT && git status"
+
 echo ""
 
 # ============================================================
