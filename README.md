@@ -59,7 +59,7 @@ Allows destructive operations **within your project** but blocks them **outside*
 - **`find` options** — handles `-L`, `-H`, `-P` before the search path
 - **Path traversal** — `..` segments are resolved before boundary check
 - **`~` and `$HOME` expansion** — `rm ~/file` and `rm $HOME/file` are correctly detected as outside-project
-- **Symlink resolution** — handles macOS `/var` → `/private/var` and similar
+- **Symlink resolution** — handles macOS `/var` → `/private/var`, dereferences symlink chains in Edit/Write/MultiEdit (fail-closed after 20 hops)
 
 ### Known limitations
 
@@ -81,7 +81,7 @@ From marketplace:
 
 ## How it works
 
-Pure-bash PreToolUse hooks for Bash, Edit, and Write tools. The Bash hook splits chained commands and resolves target paths (handling symlinks, `..`, `~`, `$HOME`); the Edit and Write hooks perform file path boundary checks against `$CLAUDE_PROJECT_DIR`. Dependencies: bash + jq.
+Pure-bash PreToolUse hooks for Bash, Edit, MultiEdit, and Write tools. The Bash hook splits chained commands and resolves target paths (handling symlinks, `..`, `~`, `$HOME`); the Edit, MultiEdit, and Write hooks perform file path boundary checks against `$CLAUDE_PROJECT_DIR`. Dependencies: bash + jq.
 
 ## Testing
 
