@@ -794,6 +794,32 @@ expect_blocked_cwd "mv file with cwd=/tmp" \
 expect_allowed_cwd "mv file with cwd=project" \
   "mv a.txt b.txt" "$PROJECT"
 
+# Destructive git/rails/rake with cwd outside project
+expect_blocked_cwd "git clean with cwd=/tmp" \
+  "git clean -fd" "/tmp"
+
+expect_blocked_cwd "git reset --hard with cwd=/tmp" \
+  "git reset --hard HEAD~1" "/tmp"
+
+expect_blocked_cwd "git checkout . with cwd=/tmp" \
+  "git checkout ." "/tmp"
+
+expect_blocked_cwd "git push --force with cwd=/tmp" \
+  "git push --force origin main" "/tmp"
+
+expect_blocked_cwd "rails db:drop with cwd=/tmp" \
+  "rails db:drop" "/tmp"
+
+expect_blocked_cwd "rake db:reset with cwd=/tmp" \
+  "rake db:reset" "/tmp"
+
+# Safe git with cwd outside project — allowed
+expect_allowed_cwd "git status with cwd=/tmp (safe)" \
+  "git status" "/tmp"
+
+expect_allowed_cwd "git log with cwd=/tmp (safe)" \
+  "git log" "/tmp"
+
 echo ""
 
 # ============================================================

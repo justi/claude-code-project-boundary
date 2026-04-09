@@ -81,6 +81,13 @@ resolve_path() {
 # Resolve PROJECT_DIR itself so symlinks (e.g. /var -> /private/var on macOS) match
 PROJECT_DIR=$(resolve_path "$PROJECT_DIR")
 
+# Check if the effective working directory is outside the project
+EFFECTIVE_CWD_RESOLVED=$(resolve_path "$EFFECTIVE_CWD")
+CWD_OUTSIDE_PROJECT=0
+if [[ "$EFFECTIVE_CWD_RESOLVED/" != "$PROJECT_DIR/"* ]]; then
+  CWD_OUTSIDE_PROJECT=1
+fi
+
 # --- Expand ~ and $HOME in a command argument ---
 expand_path() {
   local p="$1"
@@ -188,21 +195,27 @@ check_single_command() {
     return 0
   fi
 
-  # If a previous cd went outside project, block any destructive command
-  if [[ "${_GUARD_CD_OUTSIDE:-0}" == "1" ]]; then
+  # Block destructive commands when running outside the project
+  # (either via cd in a chained command, or via cwd from the hook event)
+  local outside_context=0
+  if [[ "${_GUARD_CD_OUTSIDE:-0}" == "1" || "$CWD_OUTSIDE_PROJECT" == "1" ]]; then
+    outside_context=1
+  fi
+
+  if [[ "$outside_context" == "1" ]]; then
     local destructive_cmds="rm|mv|cp|ln|chmod|chown|tee|find|curl|wget|dd"
     if echo "$CMD" | grep -qE "(^|[[:space:]])($destructive_cmds)($|[[:space:]])"; then
-      echo "BLOCKED: Destructive command after 'cd' outside project directory. Ask user for explicit permission." >&2
+      echo "BLOCKED: Destructive command outside project directory. Ask user for explicit permission." >&2
       exit 2
     fi
     # Destructive git subcommands
     if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+(clean|checkout[[:space:]]+\.|reset[[:space:]]+--hard|push[[:space:]]+.*(-f|--force))'; then
-      echo "BLOCKED: Destructive git command after 'cd' outside project directory. Ask user for explicit permission." >&2
+      echo "BLOCKED: Destructive git command outside project directory. Ask user for explicit permission." >&2
       exit 2
     fi
     # Destructive rails/rake subcommands
     if echo "$CMD" | grep -qE '(^|[[:space:]])(rails|rake)[[:space:]]+db:(drop|reset)'; then
-      echo "BLOCKED: Destructive rails/rake command after 'cd' outside project directory. Ask user for explicit permission." >&2
+      echo "BLOCKED: Destructive rails/rake command outside project directory. Ask user for explicit permission." >&2
       exit 2
     fi
   fi
