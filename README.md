@@ -1,6 +1,6 @@
 # Project Boundary — Claude Code Plugin
 
-Allows destructive operations **within your project** but blocks them **outside** the project directory. Built for `dangerouslySkipPermissions` mode where Claude doesn't ask — this plugin is your safety net.
+Allows destructive operations **within your project** but blocks them **outside** the project directory. Built for `--dangerously-skip-permissions` mode where Claude doesn't ask — this plugin is your safety net.
 
 ## How it differs from existing plugins
 
