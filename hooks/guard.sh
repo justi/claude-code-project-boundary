@@ -220,35 +220,6 @@ check_single_command() {
     fi
   fi
 
-  # --- Always blocked (dangerous regardless of location) ---
-  # Normalize multiple spaces to single space for pattern matching
-  local CMD_NORMALIZED
-  CMD_NORMALIZED=$(echo "$CMD" | sed 's/[[:space:]]\{1,\}/ /g')
-  local ALWAYS_BLOCKED=(
-    "git push.*--force"
-    "git push.*-f($|[[:space:]])"
-    "git reset --hard"
-    "git checkout \."
-    "git clean.*-f"
-    "drop_table"
-    "drop table"
-    "truncate table"
-    "rails db:drop"
-    "rails db:reset"
-    "rake db:drop"
-    "rake db:reset"
-    "mkfs\."
-    "dd if="
-    "(^|[[:space:]])format($|[[:space:]]).*disk"
-  )
-
-  for pattern in "${ALWAYS_BLOCKED[@]}"; do
-    if echo "$CMD_NORMALIZED" | grep -qiE "$pattern"; then
-      echo "BLOCKED: '$CMD' matches dangerous pattern '$pattern'. This command is always blocked. Ask user for explicit permission." >&2
-      exit 2
-    fi
-  done
-
   # --- xargs with dangerous commands ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])xargs($|[[:space:]])'; then
     # Check if xargs is followed by a dangerous command

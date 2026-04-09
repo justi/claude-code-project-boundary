@@ -10,20 +10,6 @@ Allows destructive operations **within your project** but blocks them **outside*
 
 ## What it does
 
-### Always blocked (regardless of location)
-
-| Command | Example |
-|---------|---------|
-| `git push --force` / `-f` | `git push --force origin main` |
-| `git reset --hard` | `git reset --hard HEAD~1` |
-| `git checkout .` | `git checkout .` |
-| `git clean -f` | `git clean -fd` |
-| `DROP TABLE` / `TRUNCATE TABLE` | `DROP TABLE users;` |
-| `rails db:drop` / `db:reset` | `rails db:drop` |
-| `rake db:drop` / `db:reset` | `rake db:drop` |
-| `mkfs.*` | `mkfs.ext4 /dev/sda1` |
-| `dd if=` | `dd if=/dev/zero of=/dev/sda` |
-
 ### Boundary-checked (allowed inside project, blocked outside)
 
 | Operation | Inside project | Outside project |

@@ -9,56 +9,7 @@ echo "========================================"
 echo ""
 
 # ============================================================
-# 1. Always-blocked patterns
-# ============================================================
-echo "--- Always-blocked patterns ---"
-
-expect_blocked "git push --force" \
-  "git push --force origin main"
-
-expect_blocked "git push -f (with space after)" \
-  "git push -f origin main"
-
-expect_blocked "git push -f (end of command)" \
-  "git push origin main -f"
-
-expect_blocked "git reset --hard" \
-  "git reset --hard HEAD~1"
-
-expect_blocked "git checkout ." \
-  "git checkout ."
-
-expect_blocked "git clean -f" \
-  "git clean -fd"
-
-expect_blocked "drop table (SQL)" \
-  "echo 'DROP TABLE users;'"
-
-expect_blocked "truncate table (SQL)" \
-  "echo 'TRUNCATE TABLE users;'"
-
-expect_blocked "rails db:drop" \
-  "rails db:drop"
-
-expect_blocked "rails db:reset" \
-  "rails db:reset"
-
-expect_blocked "rake db:drop" \
-  "rake db:drop"
-
-expect_blocked "rake db:reset" \
-  "rake db:reset"
-
-expect_blocked "mkfs" \
-  "mkfs.ext4 /dev/sda1"
-
-expect_blocked "dd if=" \
-  "dd if=/dev/zero of=/dev/sda"
-
-echo ""
-
-# ============================================================
-# 2. rm inside project (should PASS)
+# 1. rm inside project (should PASS)
 # ============================================================
 echo "--- rm inside project ---"
 
@@ -776,16 +727,5 @@ expect_blocked "mv -t /tmp" \
   "mv -t /tmp $PROJECT/file.txt"
 
 echo ""
-
-# ============================================================
-# 45. ALWAYS_BLOCKED spacing variants
-# ============================================================
-echo "--- Always-blocked spacing variants ---"
-
-expect_blocked "git  reset  --hard (extra spaces)" \
-  "git  reset  --hard"
-
-expect_blocked "git push  --force (extra space)" \
-  "git push  --force"
 
 echo ""
