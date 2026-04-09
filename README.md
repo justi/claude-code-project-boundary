@@ -39,6 +39,7 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `wget -O` / `wget --output-document` | Allowed | **Blocked** |
 | `find -delete` / `find -exec rm` | Allowed | **Blocked** |
 | **Edit** tool (file edits) | Allowed | **Blocked** |
+| **MultiEdit** tool (multi-file edits) | Allowed | **Blocked** |
 | **Write** tool (file creation) | Allowed | **Blocked** |
 
 ### Always blocked (unsafe to inspect)

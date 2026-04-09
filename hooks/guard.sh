@@ -117,6 +117,10 @@ if [ -n "$FILE_PATH" ]; then
     fi
     max_depth=$((max_depth - 1))
   done
+  # Canonicalize the final path (resolve /var -> /private/var on macOS)
+  if [[ -e "$RESOLVED" ]]; then
+    RESOLVED=$(cd "$(dirname "$RESOLVED")" && pwd -P)/$(basename "$RESOLVED")
+  fi
   if ! is_inside_project "$RESOLVED"; then
     echo "BLOCKED: File '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
     exit 2

@@ -32,19 +32,15 @@ expect_blocked() {
   local description="$1"
   local cmd="$2"
   TOTAL=$((TOTAL + 1))
-  if run_guard "$cmd"; then
-    echo "FAIL: $description -- expected BLOCKED but got ALLOWED"
+  run_guard "$cmd"
+  local rc=$?
+  if [ "$rc" -eq 2 ]; then
+    echo "PASS: $description"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: $description -- expected BLOCKED (exit 2) but got exit $rc"
     echo "      command: $cmd"
     FAIL=$((FAIL + 1))
-  else
-    local rc=$?
-    if [ "$rc" -eq 2 ] || [ "$rc" -ne 0 ]; then
-      echo "PASS: $description"
-      PASS=$((PASS + 1))
-    else
-      echo "FAIL: $description -- expected exit 2 but got exit $rc"
-      FAIL=$((FAIL + 1))
-    fi
   fi
 }
 

@@ -155,8 +155,14 @@ expect_file_blocked "Write symlink pointing outside project" \
 
 # Symlink to file inside project — should be allowed
 ln -s "$PROJECT/subdir" "$PROJECT/link_to_subdir"
-expect_file_allowed "Edit symlink pointing inside project" \
+expect_file_allowed "Edit symlink pointing inside project (dir)" \
   "$PROJECT/link_to_subdir/file.txt"
+
+# Symlink to file inside project (file-level symlink)
+touch "$PROJECT/inside.txt"
+ln -s "$PROJECT/inside.txt" "$PROJECT/link_to_inside.txt"
+expect_file_allowed "Edit symlink to file inside project" \
+  "$PROJECT/link_to_inside.txt"
 
 # Symlink chain: project/a -> project/b -> /tmp/outside
 OUTSIDE_FILE2="$TMPDIR_BASE/outside2.txt"
