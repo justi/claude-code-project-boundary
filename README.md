@@ -25,6 +25,10 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `wget -O` / `wget --output-document` | Allowed | **Blocked** |
 | `find -delete` / `find -exec rm` | Allowed | **Blocked** |
 | `dd of=` | Allowed | **Blocked** |
+| `install` (source and destination) | Allowed | **Blocked** |
+| `rsync` (source and destination) | Allowed | **Blocked** |
+| `tar -C` / `--directory=` | Allowed | **Blocked** |
+| `unzip -d` / `cpio -D` | Allowed | **Blocked** |
 | **Edit** tool (file edits) | Allowed | **Blocked** |
 | **MultiEdit** tool (multi-file edits) | Allowed | **Blocked** |
 | **Write** tool (file creation) | Allowed | **Blocked** |

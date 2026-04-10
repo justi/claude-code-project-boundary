@@ -778,6 +778,56 @@ expect_blocked "dd of=~/file" \
 echo ""
 
 # ============================================================
+# 45b. Archive extraction (tar, unzip, cpio)
+# ============================================================
+echo "--- Archive extraction ---"
+
+expect_blocked "tar -C /etc -xf" \
+  "tar -C /etc -xf archive.tar"
+
+expect_blocked "tar --directory=/etc -xf" \
+  "tar --directory=/etc -xf archive.tar"
+
+expect_allowed "tar -C inside project" \
+  "tar -C $PROJECT/extract -xf archive.tar"
+
+expect_blocked "unzip -d /etc" \
+  "unzip -d /etc archive.zip"
+
+expect_allowed "unzip -d inside project" \
+  "unzip -d $PROJECT/extract archive.zip"
+
+expect_blocked "cpio -D /etc" \
+  "cpio -D /etc -i"
+
+echo ""
+
+# ============================================================
+# 45c. install and rsync
+# ============================================================
+echo "--- install and rsync ---"
+
+expect_blocked "install /etc/passwd project" \
+  "install /etc/passwd $PROJECT/stolen"
+
+expect_blocked "install to /etc" \
+  "install $PROJECT/file /etc/somewhere"
+
+expect_allowed "install inside project" \
+  "install -m 644 $PROJECT/a $PROJECT/b"
+
+expect_blocked "rsync /etc/passwd" \
+  "rsync /etc/passwd $PROJECT/"
+
+expect_blocked "rsync to /etc" \
+  "rsync $PROJECT/file /etc/"
+
+expect_allowed "rsync inside project" \
+  "rsync -av $PROJECT/src/ $PROJECT/dst/"
+
+echo ""
+
+# ============================================================
 # 46. cwd from hook event payload
 # ============================================================
 echo "--- cwd from hook event ---"
@@ -826,6 +876,25 @@ expect_blocked_cwd "rails db:drop with cwd=/tmp" \
 
 expect_blocked_cwd "rake db:reset with cwd=/tmp" \
   "rake db:reset" "/tmp"
+
+# More destructive git commands after cd outside project
+expect_blocked_cwd "git restore . with cwd=/tmp" \
+  "git restore ." "/tmp"
+
+expect_blocked_cwd "git restore -- . with cwd=/tmp" \
+  "git restore -- ." "/tmp"
+
+expect_blocked_cwd "git stash drop with cwd=/tmp" \
+  "git stash drop" "/tmp"
+
+expect_blocked_cwd "git stash clear with cwd=/tmp" \
+  "git stash clear" "/tmp"
+
+expect_blocked_cwd "git branch -D with cwd=/tmp" \
+  "git branch -D feature" "/tmp"
+
+expect_blocked_cwd "git reflog expire with cwd=/tmp" \
+  "git reflog expire --expire=now --all" "/tmp"
 
 # Safe git with cwd outside project — allowed
 expect_allowed_cwd "git status with cwd=/tmp (safe)" \
