@@ -4,9 +4,18 @@ set -euo pipefail
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+EVENT_CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 
 if [ -z "$COMMAND" ] && [ -z "$FILE_PATH" ]; then
   exit 0
+fi
+
+# Use cwd from the hook event if provided, so relative paths resolve correctly.
+# EFFECTIVE_CWD is used to resolve relative paths in commands.
+if [ -n "$EVENT_CWD" ]; then
+  EFFECTIVE_CWD="$EVENT_CWD"
+else
+  EFFECTIVE_CWD=""
 fi
 
 # If CLAUDE_PROJECT_DIR is not set, fall back to pwd with a warning.
@@ -18,6 +27,12 @@ fi
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 # Ensure PROJECT_DIR has no trailing slash for consistent comparison
 PROJECT_DIR="${PROJECT_DIR%/}"
+
+# EFFECTIVE_CWD: where relative paths in commands resolve to.
+# Uses cwd from hook event if provided, otherwise PROJECT_DIR.
+if [ -z "$EFFECTIVE_CWD" ]; then
+  EFFECTIVE_CWD="$PROJECT_DIR"
+fi
 
 # --- Portable realpath in pure bash ---
 # macOS realpath does not support -m (non-existent path resolution).
@@ -65,6 +80,13 @@ resolve_path() {
 
 # Resolve PROJECT_DIR itself so symlinks (e.g. /var -> /private/var on macOS) match
 PROJECT_DIR=$(resolve_path "$PROJECT_DIR")
+
+# Check if the effective working directory is outside the project
+EFFECTIVE_CWD_RESOLVED=$(resolve_path "$EFFECTIVE_CWD")
+CWD_OUTSIDE_PROJECT=0
+if [[ "$EFFECTIVE_CWD_RESOLVED/" != "$PROJECT_DIR/"* ]]; then
+  CWD_OUTSIDE_PROJECT=1
+fi
 
 # --- Expand ~ and $HOME in a command argument ---
 expand_path() {
@@ -162,22 +184,90 @@ check_single_command() {
       cd_target=$(expand_path "$cd_target")
     fi
     if [[ "$cd_target" != /* ]]; then
-      cd_target="$PROJECT_DIR/$cd_target"
+      cd_target="$EFFECTIVE_CWD/$cd_target"
     fi
     local resolved_cd
     resolved_cd=$(resolve_path "$cd_target")
+    EFFECTIVE_CWD="$resolved_cd"
     if ! is_inside_project "$resolved_cd"; then
-      # cd outside project — flag it so subsequent commands in chain are blocked
       export _GUARD_CD_OUTSIDE=1
+      CWD_OUTSIDE_PROJECT=1
+    else
+      export _GUARD_CD_OUTSIDE=0
+      CWD_OUTSIDE_PROJECT=0
     fi
     return 0
   fi
 
-  # If a previous cd went outside project, block any destructive command
-  if [[ "${_GUARD_CD_OUTSIDE:-0}" == "1" ]]; then
+  # Block destructive commands when running outside the project
+  # (either via cd in a chained command, or via cwd from the hook event)
+  local outside_context=0
+  if [[ "${_GUARD_CD_OUTSIDE:-0}" == "1" || "$CWD_OUTSIDE_PROJECT" == "1" ]]; then
+    outside_context=1
+  fi
+
+  if [[ "$outside_context" == "1" ]]; then
     local destructive_cmds="rm|mv|cp|ln|chmod|chown|tee|find|curl|wget"
     if echo "$CMD" | grep -qE "(^|[[:space:]])($destructive_cmds)($|[[:space:]])"; then
-      echo "BLOCKED: Destructive command after 'cd' outside project directory. Ask user for explicit permission." >&2
+      echo "BLOCKED: Destructive command outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # Destructive git subcommands
+    # git clean only destructive with -f/--force AND without -n/--dry-run
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+clean([[:space:]]|$)'; then
+      local has_force=0
+      local is_dry_run=0
+      if echo "$CMD" | grep -qE '(^|[[:space:]])--force([[:space:]]|$)' || \
+         echo "$CMD" | grep -qE '(^|[[:space:]])-[a-zA-Z]*f[a-zA-Z]*([[:space:]]|$)'; then
+        has_force=1
+      fi
+      if echo "$CMD" | grep -qE '(^|[[:space:]])--dry-run([[:space:]]|$)' || \
+         echo "$CMD" | grep -qE '(^|[[:space:]])-[a-zA-Z]*n[a-zA-Z]*([[:space:]]|$)'; then
+        is_dry_run=1
+      fi
+      if [[ "$has_force" == "1" && "$is_dry_run" == "0" ]]; then
+        echo "BLOCKED: Destructive 'git clean' outside project directory. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
+    # git checkout . and git checkout -- .
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+checkout([[:space:]]+--)?[[:space:]]+\.([[:space:]]|$)'; then
+      echo "BLOCKED: Destructive 'git checkout .' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # git reset --hard
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+reset[[:space:]]+--hard'; then
+      echo "BLOCKED: Destructive 'git reset --hard' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # git push --force / -f
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+push[[:space:]]+.*(--force|-f)([[:space:]]|$)'; then
+      echo "BLOCKED: Destructive 'git push --force' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # git restore . / git restore -- . / git restore --worktree .
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+restore([[:space:]]+(--worktree|--staged|--))*[[:space:]]+\.([[:space:]]|$)'; then
+      echo "BLOCKED: Destructive 'git restore .' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # git stash drop / clear
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+stash[[:space:]]+(drop|clear)'; then
+      echo "BLOCKED: Destructive 'git stash drop/clear' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # git branch -D / --delete --force
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+branch[[:space:]]+(-D|--delete[[:space:]]+--force)'; then
+      echo "BLOCKED: Destructive 'git branch -D' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # git reflog expire --all or --expire=now
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+reflog[[:space:]]+expire'; then
+      echo "BLOCKED: Destructive 'git reflog expire' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # Destructive rails/rake subcommands
+    if echo "$CMD" | grep -qE '(^|[[:space:]])(rails|rake)[[:space:]]+db:(drop|reset)'; then
+      echo "BLOCKED: Destructive rails/rake command outside project directory. Ask user for explicit permission." >&2
       exit 2
     fi
   fi
@@ -220,35 +310,6 @@ check_single_command() {
     fi
   fi
 
-  # --- Always blocked (dangerous regardless of location) ---
-  # Normalize multiple spaces to single space for pattern matching
-  local CMD_NORMALIZED
-  CMD_NORMALIZED=$(echo "$CMD" | sed 's/[[:space:]]\{1,\}/ /g')
-  local ALWAYS_BLOCKED=(
-    "git push.*--force"
-    "git push.*-f($|[[:space:]])"
-    "git reset --hard"
-    "git checkout \."
-    "git clean.*-f"
-    "drop_table"
-    "drop table"
-    "truncate table"
-    "rails db:drop"
-    "rails db:reset"
-    "rake db:drop"
-    "rake db:reset"
-    "mkfs\."
-    "dd if="
-    "(^|[[:space:]])format($|[[:space:]]).*disk"
-  )
-
-  for pattern in "${ALWAYS_BLOCKED[@]}"; do
-    if echo "$CMD_NORMALIZED" | grep -qiE "$pattern"; then
-      echo "BLOCKED: '$CMD' matches dangerous pattern '$pattern'. This command is always blocked. Ask user for explicit permission." >&2
-      exit 2
-    fi
-  done
-
   # --- xargs with dangerous commands ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])xargs($|[[:space:]])'; then
     # Check if xargs is followed by a dangerous command
@@ -286,7 +347,7 @@ check_single_command() {
       for find_path in "${find_paths[@]}"; do
         find_path=$(expand_path "$find_path")
         if [[ "$find_path" != /* ]]; then
-          find_path="$PROJECT_DIR/$find_path"
+          find_path="$EFFECTIVE_CWD/$find_path"
         fi
         local resolved_find
         resolved_find=$(resolve_path "$find_path")
@@ -307,7 +368,7 @@ check_single_command() {
       TARGET=$(expand_path "$TARGET")
       # Resolve to absolute path
       if [[ "$TARGET" != /* ]]; then
-        TARGET="$PROJECT_DIR/$TARGET"
+        TARGET="$EFFECTIVE_CWD/$TARGET"
       fi
       RESOLVED=$(resolve_path "$TARGET")
 
@@ -331,7 +392,7 @@ check_single_command() {
     mv_target_dir=$(echo "$CMD" | grep -oE '\-\-target-directory=[^ ]+' | sed 's/--target-directory=//' || true)
     if [ -n "$mv_target_dir" ]; then
       mv_target_dir=$(expand_path "$mv_target_dir")
-      [[ "$mv_target_dir" != /* ]] && mv_target_dir="$PROJECT_DIR/$mv_target_dir"
+      [[ "$mv_target_dir" != /* ]] && mv_target_dir="$EFFECTIVE_CWD/$mv_target_dir"
       local resolved_mv_td
       resolved_mv_td=$(resolve_path "$mv_target_dir")
       if ! is_inside_project "$resolved_mv_td"; then
@@ -344,7 +405,7 @@ check_single_command() {
     for TARGET in $MV_ARGS; do
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
-        TARGET="$PROJECT_DIR/$TARGET"
+        TARGET="$EFFECTIVE_CWD/$TARGET"
       fi
       RESOLVED=$(resolve_path "$TARGET")
 
@@ -362,7 +423,7 @@ check_single_command() {
     cp_target_dir=$(echo "$CMD" | grep -oE '\-\-target-directory=[^ ]+' | sed 's/--target-directory=//' || true)
     if [ -n "$cp_target_dir" ]; then
       cp_target_dir=$(expand_path "$cp_target_dir")
-      [[ "$cp_target_dir" != /* ]] && cp_target_dir="$PROJECT_DIR/$cp_target_dir"
+      [[ "$cp_target_dir" != /* ]] && cp_target_dir="$EFFECTIVE_CWD/$cp_target_dir"
       local resolved_cp_td
       resolved_cp_td=$(resolve_path "$cp_target_dir")
       if ! is_inside_project "$resolved_cp_td"; then
@@ -375,7 +436,7 @@ check_single_command() {
     for TARGET in $CP_ARGS; do
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
-        TARGET="$PROJECT_DIR/$TARGET"
+        TARGET="$EFFECTIVE_CWD/$TARGET"
       fi
       RESOLVED=$(resolve_path "$TARGET")
 
@@ -393,7 +454,7 @@ check_single_command() {
     for TARGET in $LN_ARGS; do
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
-        TARGET="$PROJECT_DIR/$TARGET"
+        TARGET="$EFFECTIVE_CWD/$TARGET"
       fi
       RESOLVED=$(resolve_path "$TARGET")
 
@@ -404,6 +465,102 @@ check_single_command() {
     done
   fi
 
+  # --- install command: like cp, check all non-flag path arguments ---
+  if echo "$CMD" | grep -qE '(^|[[:space:]])install($|[[:space:]])'; then
+    INSTALL_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
+    # Skip mode arg (numeric, after -m/--mode), owner arg (after -o), group (after -g)
+    for TARGET in $INSTALL_ARGS; do
+      # Skip pure numeric (mode) or user:group patterns
+      if [[ "$TARGET" =~ ^[0-9]+$ ]] || [[ "$TARGET" =~ ^[a-zA-Z_][a-zA-Z0-9_]*(:[a-zA-Z_][a-zA-Z0-9_]*)?$ ]]; then
+        continue
+      fi
+      TARGET=$(expand_path "$TARGET")
+      if [[ "$TARGET" != /* ]]; then
+        TARGET="$EFFECTIVE_CWD/$TARGET"
+      fi
+      RESOLVED=$(resolve_path "$TARGET")
+      if ! is_inside_project "$RESOLVED"; then
+        echo "BLOCKED: 'install' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    done
+  fi
+
+  # --- rsync command: check all non-flag path arguments ---
+  if echo "$CMD" | grep -qE '(^|[[:space:]])rsync($|[[:space:]])'; then
+    RSYNC_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
+    for TARGET in $RSYNC_ARGS; do
+      # Skip remote paths (user@host:/path or host:/path)
+      if [[ "$TARGET" =~ : ]]; then
+        continue
+      fi
+      TARGET=$(expand_path "$TARGET")
+      if [[ "$TARGET" != /* ]]; then
+        TARGET="$EFFECTIVE_CWD/$TARGET"
+      fi
+      RESOLVED=$(resolve_path "$TARGET")
+      if ! is_inside_project "$RESOLVED"; then
+        echo "BLOCKED: 'rsync' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    done
+  fi
+
+  # --- tar: check -C / --directory=PATH for extraction ---
+  if echo "$CMD" | grep -qE '(^|[[:space:]])tar($|[[:space:]])'; then
+    # -C PATH (separated)
+    tar_dir=$(echo "$CMD" | grep -oE '(^|[[:space:]])-C[[:space:]]+[^ ]+' | sed -E 's/.*-C[[:space:]]+//' || true)
+    if [ -z "$tar_dir" ]; then
+      # --directory=PATH
+      tar_dir=$(echo "$CMD" | grep -oE '\-\-directory=[^ ]+' | sed 's/--directory=//' || true)
+    fi
+    if [ -n "$tar_dir" ]; then
+      tar_dir=$(expand_path "$tar_dir")
+      if [[ "$tar_dir" != /* ]]; then
+        tar_dir="$EFFECTIVE_CWD/$tar_dir"
+      fi
+      local resolved_tar
+      resolved_tar=$(resolve_path "$tar_dir")
+      if ! is_inside_project "$resolved_tar"; then
+        echo "BLOCKED: 'tar -C' targets '$resolved_tar' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
+  fi
+
+  # --- unzip -d PATH / cpio -D PATH ---
+  if echo "$CMD" | grep -qE '(^|[[:space:]])unzip($|[[:space:]])'; then
+    unzip_dir=$(echo "$CMD" | grep -oE '(^|[[:space:]])-d[[:space:]]+[^ ]+' | sed -E 's/.*-d[[:space:]]+//' || true)
+    if [ -n "$unzip_dir" ]; then
+      unzip_dir=$(expand_path "$unzip_dir")
+      if [[ "$unzip_dir" != /* ]]; then
+        unzip_dir="$EFFECTIVE_CWD/$unzip_dir"
+      fi
+      local resolved_unzip
+      resolved_unzip=$(resolve_path "$unzip_dir")
+      if ! is_inside_project "$resolved_unzip"; then
+        echo "BLOCKED: 'unzip -d' targets '$resolved_unzip' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
+  fi
+
+  if echo "$CMD" | grep -qE '(^|[[:space:]])cpio($|[[:space:]])'; then
+    cpio_dir=$(echo "$CMD" | grep -oE '(^|[[:space:]])-D[[:space:]]+[^ ]+' | sed -E 's/.*-D[[:space:]]+//' || true)
+    if [ -n "$cpio_dir" ]; then
+      cpio_dir=$(expand_path "$cpio_dir")
+      if [[ "$cpio_dir" != /* ]]; then
+        cpio_dir="$EFFECTIVE_CWD/$cpio_dir"
+      fi
+      local resolved_cpio
+      resolved_cpio=$(resolve_path "$cpio_dir")
+      if ! is_inside_project "$resolved_cpio"; then
+        echo "BLOCKED: 'cpio -D' targets '$resolved_cpio' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
+  fi
+
   # --- tee command: extract file arguments, block if outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])tee($|[[:space:]])'; then
     TEE_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])tee[[:space:]]+.*' | sed 's/^[[:space:]]*tee[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
@@ -411,7 +568,7 @@ check_single_command() {
     for TARGET in $TEE_ARGS; do
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
-        TARGET="$PROJECT_DIR/$TARGET"
+        TARGET="$EFFECTIVE_CWD/$TARGET"
       fi
       RESOLVED=$(resolve_path "$TARGET")
 
@@ -436,7 +593,7 @@ check_single_command() {
     if [ -n "$curl_output" ]; then
       curl_output=$(expand_path "$curl_output")
       if [[ "$curl_output" != /* ]]; then
-        curl_output="$PROJECT_DIR/$curl_output"
+        curl_output="$EFFECTIVE_CWD/$curl_output"
       fi
       local resolved_curl
       resolved_curl=$(resolve_path "$curl_output")
@@ -460,12 +617,30 @@ check_single_command() {
     if [ -n "$wget_output" ]; then
       wget_output=$(expand_path "$wget_output")
       if [[ "$wget_output" != /* ]]; then
-        wget_output="$PROJECT_DIR/$wget_output"
+        wget_output="$EFFECTIVE_CWD/$wget_output"
       fi
       local resolved_wget
       resolved_wget=$(resolve_path "$wget_output")
       if ! is_inside_project "$resolved_wget"; then
         echo "BLOCKED: 'wget' output file '$resolved_wget' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
+  fi
+
+  # --- dd of= outside project ---
+  if echo "$CMD" | grep -qE '(^|[[:space:]])dd($|[[:space:]])'; then
+    local dd_output=""
+    dd_output=$(echo "$CMD" | grep -oE 'of=[^ ]+' | sed 's/^of=//' || true)
+    if [ -n "$dd_output" ]; then
+      dd_output=$(expand_path "$dd_output")
+      if [[ "$dd_output" != /* ]]; then
+        dd_output="$EFFECTIVE_CWD/$dd_output"
+      fi
+      local resolved_dd
+      resolved_dd=$(resolve_path "$dd_output")
+      if ! is_inside_project "$resolved_dd"; then
+        echo "BLOCKED: 'dd' output '$resolved_dd' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
     fi
@@ -478,7 +653,7 @@ check_single_command() {
     if [ -n "$REDIR_TARGET" ]; then
       REDIR_TARGET=$(expand_path "$REDIR_TARGET")
       if [[ "$REDIR_TARGET" != /* ]]; then
-        REDIR_TARGET="$PROJECT_DIR/$REDIR_TARGET"
+        REDIR_TARGET="$EFFECTIVE_CWD/$REDIR_TARGET"
       fi
       RESOLVED=$(resolve_path "$REDIR_TARGET")
 
@@ -508,7 +683,7 @@ check_single_command() {
       for TARGET in $PATHS; do
         TARGET=$(expand_path "$TARGET")
         if [[ "$TARGET" != /* ]]; then
-          TARGET="$PROJECT_DIR/$TARGET"
+          TARGET="$EFFECTIVE_CWD/$TARGET"
         fi
         RESOLVED=$(resolve_path "$TARGET")
 

@@ -22,10 +22,56 @@ export CLAUDE_PROJECT_DIR="$PROJECT"
 
 run_guard() {
   local cmd="$1"
+  local cwd="${2:-}"
   local json
-  json=$(jq -n --arg c "$cmd" '{"tool_input": {"command": $c}}')
+  if [ -n "$cwd" ]; then
+    json=$(jq -n --arg c "$cmd" --arg d "$cwd" '{"cwd": $d, "tool_input": {"command": $c}}')
+  else
+    json=$(jq -n --arg c "$cmd" '{"tool_input": {"command": $c}}')
+  fi
   echo "$json" | bash "$GUARD" 2>/dev/null
   return $?
+}
+
+run_guard_cwd() {
+  local cmd="$1"
+  local cwd="$2"
+  run_guard "$cmd" "$cwd"
+  return $?
+}
+
+expect_blocked_cwd() {
+  local description="$1"
+  local cmd="$2"
+  local cwd="$3"
+  TOTAL=$((TOTAL + 1))
+  run_guard_cwd "$cmd" "$cwd"
+  local rc=$?
+  if [ "$rc" -eq 2 ]; then
+    echo "PASS: $description"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: $description -- expected BLOCKED (exit 2) but got exit $rc"
+    echo "      command: $cmd (cwd: $cwd)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+expect_allowed_cwd() {
+  local description="$1"
+  local cmd="$2"
+  local cwd="$3"
+  TOTAL=$((TOTAL + 1))
+  run_guard_cwd "$cmd" "$cwd"
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "PASS: $description"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: $description -- expected ALLOWED (exit 0) but got exit $rc"
+    echo "      command: $cmd (cwd: $cwd)"
+    FAIL=$((FAIL + 1))
+  fi
 }
 
 expect_blocked() {
