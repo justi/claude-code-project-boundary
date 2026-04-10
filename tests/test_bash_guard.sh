@@ -9,56 +9,7 @@ echo "========================================"
 echo ""
 
 # ============================================================
-# 1. Always-blocked patterns
-# ============================================================
-echo "--- Always-blocked patterns ---"
-
-expect_blocked "git push --force" \
-  "git push --force origin main"
-
-expect_blocked "git push -f (with space after)" \
-  "git push -f origin main"
-
-expect_blocked "git push -f (end of command)" \
-  "git push origin main -f"
-
-expect_blocked "git reset --hard" \
-  "git reset --hard HEAD~1"
-
-expect_blocked "git checkout ." \
-  "git checkout ."
-
-expect_blocked "git clean -f" \
-  "git clean -fd"
-
-expect_blocked "drop table (SQL)" \
-  "echo 'DROP TABLE users;'"
-
-expect_blocked "truncate table (SQL)" \
-  "echo 'TRUNCATE TABLE users;'"
-
-expect_blocked "rails db:drop" \
-  "rails db:drop"
-
-expect_blocked "rails db:reset" \
-  "rails db:reset"
-
-expect_blocked "rake db:drop" \
-  "rake db:drop"
-
-expect_blocked "rake db:reset" \
-  "rake db:reset"
-
-expect_blocked "mkfs" \
-  "mkfs.ext4 /dev/sda1"
-
-expect_blocked "dd if=" \
-  "dd if=/dev/zero of=/dev/sda"
-
-echo ""
-
-# ============================================================
-# 2. rm inside project (should PASS)
+# 1. rm inside project (should PASS)
 # ============================================================
 echo "--- rm inside project ---"
 
@@ -622,6 +573,39 @@ expect_blocked "cd /tmp && rm -rf something" \
 expect_allowed "cd to project subdir && rm file" \
   "cd $PROJECT/subdir && rm file.txt"
 
+# git/rails/rake after cd outside project
+expect_blocked "cd /tmp && git clean -fd" \
+  "cd /tmp && git clean -fd"
+
+expect_blocked "cd /tmp && git checkout ." \
+  "cd /tmp && git checkout ."
+
+expect_blocked "cd /tmp && git reset --hard" \
+  "cd /tmp && git reset --hard HEAD~1"
+
+expect_blocked "cd /tmp && rails db:drop" \
+  "cd /tmp && rails db:drop"
+
+expect_blocked "cd /tmp && rake db:reset" \
+  "cd /tmp && rake db:reset"
+
+# safe git/rails/rake after cd outside — allowed
+expect_allowed "cd /tmp && git status (safe)" \
+  "cd /tmp && git status"
+
+expect_allowed "cd /tmp && git log (safe)" \
+  "cd /tmp && git log"
+
+expect_allowed "cd /tmp && rails routes (safe)" \
+  "cd /tmp && rails routes"
+
+expect_allowed "cd /tmp && rake -T (safe)" \
+  "cd /tmp && rake -T"
+
+# git inside project — allowed
+expect_allowed "cd to project && git status" \
+  "cd $PROJECT && git status"
+
 echo ""
 
 # ============================================================
@@ -778,14 +762,185 @@ expect_blocked "mv -t /tmp" \
 echo ""
 
 # ============================================================
-# 45. ALWAYS_BLOCKED spacing variants
+# 45. dd of= boundary check
 # ============================================================
-echo "--- Always-blocked spacing variants ---"
+echo "--- dd of= boundary check ---"
 
-expect_blocked "git  reset  --hard (extra spaces)" \
-  "git  reset  --hard"
+expect_blocked "dd of=/etc/file" \
+  "dd if=/dev/zero of=/etc/file bs=1M count=1"
 
-expect_blocked "git push  --force (extra space)" \
-  "git push  --force"
+expect_allowed "dd of= inside project" \
+  "dd if=/dev/zero of=$PROJECT/file.bin bs=1M count=1"
+
+expect_blocked "dd of=~/file" \
+  "dd if=/dev/zero of=~/file bs=1M"
+
+echo ""
+
+# ============================================================
+# 45b. Archive extraction (tar, unzip, cpio)
+# ============================================================
+echo "--- Archive extraction ---"
+
+expect_blocked "tar -C /etc -xf" \
+  "tar -C /etc -xf archive.tar"
+
+expect_blocked "tar --directory=/etc -xf" \
+  "tar --directory=/etc -xf archive.tar"
+
+expect_allowed "tar -C inside project" \
+  "tar -C $PROJECT/extract -xf archive.tar"
+
+expect_blocked "unzip -d /etc" \
+  "unzip -d /etc archive.zip"
+
+expect_allowed "unzip -d inside project" \
+  "unzip -d $PROJECT/extract archive.zip"
+
+expect_blocked "cpio -D /etc" \
+  "cpio -D /etc -i"
+
+echo ""
+
+# ============================================================
+# 45c. install and rsync
+# ============================================================
+echo "--- install and rsync ---"
+
+expect_blocked "install /etc/passwd project" \
+  "install /etc/passwd $PROJECT/stolen"
+
+expect_blocked "install to /etc" \
+  "install $PROJECT/file /etc/somewhere"
+
+expect_allowed "install inside project" \
+  "install -m 644 $PROJECT/a $PROJECT/b"
+
+expect_blocked "rsync /etc/passwd" \
+  "rsync /etc/passwd $PROJECT/"
+
+expect_blocked "rsync to /etc" \
+  "rsync $PROJECT/file /etc/"
+
+expect_allowed "rsync inside project" \
+  "rsync -av $PROJECT/src/ $PROJECT/dst/"
+
+echo ""
+
+# ============================================================
+# 46. cwd from hook event payload
+# ============================================================
+echo "--- cwd from hook event ---"
+
+expect_blocked_cwd "rm relative file with cwd=/tmp" \
+  "rm relative.txt" "/tmp"
+
+expect_allowed_cwd "rm relative file with cwd=project" \
+  "rm relative.txt" "$PROJECT"
+
+expect_blocked_cwd "mv file with cwd=/tmp" \
+  "mv a.txt b.txt" "/tmp"
+
+expect_allowed_cwd "mv file with cwd=project" \
+  "mv a.txt b.txt" "$PROJECT"
+
+# Destructive git/rails/rake with cwd outside project
+expect_blocked_cwd "git clean with cwd=/tmp" \
+  "git clean -fd" "/tmp"
+
+expect_blocked_cwd "git reset --hard with cwd=/tmp" \
+  "git reset --hard HEAD~1" "/tmp"
+
+expect_blocked_cwd "git checkout . with cwd=/tmp" \
+  "git checkout ." "/tmp"
+
+expect_blocked_cwd "git checkout -- . with cwd=/tmp" \
+  "git checkout -- ." "/tmp"
+
+# git clean dry-run variants — safe, allowed
+expect_allowed_cwd "git clean -nfd (dry-run) with cwd=/tmp" \
+  "git clean -nfd" "/tmp"
+
+expect_allowed_cwd "git clean --dry-run -fd with cwd=/tmp" \
+  "git clean --dry-run -fd" "/tmp"
+
+# git clean without -f is a no-op (git refuses) — should not be blocked
+expect_allowed_cwd "git clean (no -f) with cwd=/tmp" \
+  "git clean" "/tmp"
+
+expect_blocked_cwd "git push --force with cwd=/tmp" \
+  "git push --force origin main" "/tmp"
+
+expect_blocked_cwd "rails db:drop with cwd=/tmp" \
+  "rails db:drop" "/tmp"
+
+expect_blocked_cwd "rake db:reset with cwd=/tmp" \
+  "rake db:reset" "/tmp"
+
+# More destructive git commands after cd outside project
+expect_blocked_cwd "git restore . with cwd=/tmp" \
+  "git restore ." "/tmp"
+
+expect_blocked_cwd "git restore -- . with cwd=/tmp" \
+  "git restore -- ." "/tmp"
+
+expect_blocked_cwd "git stash drop with cwd=/tmp" \
+  "git stash drop" "/tmp"
+
+expect_blocked_cwd "git stash clear with cwd=/tmp" \
+  "git stash clear" "/tmp"
+
+expect_blocked_cwd "git branch -D with cwd=/tmp" \
+  "git branch -D feature" "/tmp"
+
+expect_blocked_cwd "git reflog expire with cwd=/tmp" \
+  "git reflog expire --expire=now --all" "/tmp"
+
+# Safe git with cwd outside project — allowed
+expect_allowed_cwd "git status with cwd=/tmp (safe)" \
+  "git status" "/tmp"
+
+expect_allowed_cwd "git log with cwd=/tmp (safe)" \
+  "git log" "/tmp"
+
+# cd back into project from outside cwd — should allow
+expect_allowed_cwd "cd to project && rm file (cwd=/tmp)" \
+  "cd $PROJECT && rm file.txt" "/tmp"
+
+expect_allowed_cwd "cd to project && git clean (cwd=/tmp)" \
+  "cd $PROJECT && git clean -fd" "/tmp"
+
+# dd with cwd outside — of= inside project should be allowed
+expect_allowed_cwd "dd of= inside project (cwd=/tmp)" \
+  "dd if=/dev/zero of=$PROJECT/file.bin bs=1M count=1" "/tmp"
+
+# dd with cwd outside — of= outside project should be blocked
+expect_blocked_cwd "dd of=/etc/file (cwd=/tmp)" \
+  "dd if=/dev/zero of=/etc/file bs=1M count=1" "/tmp"
+
+echo ""
+
+# ============================================================
+# 47. Previously always-blocked commands are now allowed inside project
+# ============================================================
+echo "--- Removed global blocks (regression guard) ---"
+
+expect_allowed "git push --force (inside project)" \
+  "git push --force origin main"
+
+expect_allowed "git reset --hard (inside project)" \
+  "git reset --hard HEAD~1"
+
+expect_allowed "git checkout . (inside project)" \
+  "git checkout ."
+
+expect_allowed "git clean -fd (inside project)" \
+  "git clean -fd"
+
+expect_allowed "rails db:drop (inside project)" \
+  "rails db:drop"
+
+expect_allowed "rake db:reset (inside project)" \
+  "rake db:reset"
 
 echo ""
