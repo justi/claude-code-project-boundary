@@ -814,6 +814,10 @@ expect_allowed_cwd "git clean -nfd (dry-run) with cwd=/tmp" \
 expect_allowed_cwd "git clean --dry-run -fd with cwd=/tmp" \
   "git clean --dry-run -fd" "/tmp"
 
+# git clean without -f is a no-op (git refuses) — should not be blocked
+expect_allowed_cwd "git clean (no -f) with cwd=/tmp" \
+  "git clean" "/tmp"
+
 expect_blocked_cwd "git push --force with cwd=/tmp" \
   "git push --force origin main" "/tmp"
 

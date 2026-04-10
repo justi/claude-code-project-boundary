@@ -213,10 +213,19 @@ check_single_command() {
       exit 2
     fi
     # Destructive git subcommands
-    # git clean is destructive unless -n or --dry-run is present
+    # git clean only destructive with -f/--force AND without -n/--dry-run
     if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+clean([[:space:]]|$)'; then
-      if ! echo "$CMD" | grep -qE '(^|[[:space:]])(-n|--dry-run)([[:space:]]|$)' && \
-         ! echo "$CMD" | grep -qE '(^|[[:space:]])-[a-zA-Z]*n[a-zA-Z]*([[:space:]]|$)'; then
+      local has_force=0
+      local is_dry_run=0
+      if echo "$CMD" | grep -qE '(^|[[:space:]])--force([[:space:]]|$)' || \
+         echo "$CMD" | grep -qE '(^|[[:space:]])-[a-zA-Z]*f[a-zA-Z]*([[:space:]]|$)'; then
+        has_force=1
+      fi
+      if echo "$CMD" | grep -qE '(^|[[:space:]])--dry-run([[:space:]]|$)' || \
+         echo "$CMD" | grep -qE '(^|[[:space:]])-[a-zA-Z]*n[a-zA-Z]*([[:space:]]|$)'; then
+        is_dry_run=1
+      fi
+      if [[ "$has_force" == "1" && "$is_dry_run" == "0" ]]; then
         echo "BLOCKED: Destructive 'git clean' outside project directory. Ask user for explicit permission." >&2
         exit 2
       fi
