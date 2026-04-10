@@ -45,7 +45,9 @@ Allows destructive operations **within your project** but blocks them **outside*
 ### Additional protections
 
 - **Chained commands** — splits on `;`, `&&`, `||`, `|` and checks each sub-command independently
-- **`cd` tracking** — `cd /tmp && rm -rf something` is blocked because `cd` left the project; also blocks `git`, `rails`, `rake` after `cd` outside
+- **`cwd` awareness** — uses `cwd` from the hook event, so commands run outside the project (without an explicit `cd`) are also guarded
+- **`cd` tracking** — `cd /tmp && rm -rf something` is blocked because `cd` left the project; `cd $PROJECT && rm file` is allowed even if the event `cwd` was outside
+- **Destructive subcommands outside project** — when running outside the project (via event `cwd` or `cd`), these are blocked: `git clean -f`, `git checkout .`, `git restore .`, `git reset --hard`, `git push --force`, `git stash drop/clear`, `git branch -D`, `git reflog expire`, `rails db:drop/reset`, `rake db:drop/reset`. Safe commands like `git status`, `git log`, `rails routes` remain allowed.
 - **`sudo` prefix** — stripped before checking, so `sudo rm /etc/passwd` is still blocked
 - **`find` options** — handles `-L`, `-H`, `-P` before the search path
 - **Path traversal** — `..` segments are resolved before boundary check
