@@ -804,6 +804,16 @@ expect_blocked_cwd "git reset --hard with cwd=/tmp" \
 expect_blocked_cwd "git checkout . with cwd=/tmp" \
   "git checkout ." "/tmp"
 
+expect_blocked_cwd "git checkout -- . with cwd=/tmp" \
+  "git checkout -- ." "/tmp"
+
+# git clean dry-run variants — safe, allowed
+expect_allowed_cwd "git clean -nfd (dry-run) with cwd=/tmp" \
+  "git clean -nfd" "/tmp"
+
+expect_allowed_cwd "git clean --dry-run -fd with cwd=/tmp" \
+  "git clean --dry-run -fd" "/tmp"
+
 expect_blocked_cwd "git push --force with cwd=/tmp" \
   "git push --force origin main" "/tmp"
 

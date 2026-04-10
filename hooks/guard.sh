@@ -213,8 +213,27 @@ check_single_command() {
       exit 2
     fi
     # Destructive git subcommands
-    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+(clean|checkout[[:space:]]+\.|reset[[:space:]]+--hard|push[[:space:]]+.*(-f|--force))'; then
-      echo "BLOCKED: Destructive git command outside project directory. Ask user for explicit permission." >&2
+    # git clean is destructive unless -n or --dry-run is present
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+clean([[:space:]]|$)'; then
+      if ! echo "$CMD" | grep -qE '(^|[[:space:]])(-n|--dry-run)([[:space:]]|$)' && \
+         ! echo "$CMD" | grep -qE '(^|[[:space:]])-[a-zA-Z]*n[a-zA-Z]*([[:space:]]|$)'; then
+        echo "BLOCKED: Destructive 'git clean' outside project directory. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
+    # git checkout . and git checkout -- .
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+checkout([[:space:]]+--)?[[:space:]]+\.([[:space:]]|$)'; then
+      echo "BLOCKED: Destructive 'git checkout .' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # git reset --hard
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+reset[[:space:]]+--hard'; then
+      echo "BLOCKED: Destructive 'git reset --hard' outside project directory. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    # git push --force / -f
+    if echo "$CMD" | grep -qE '(^|[[:space:]])git[[:space:]]+push[[:space:]]+.*(--force|-f)([[:space:]]|$)'; then
+      echo "BLOCKED: Destructive 'git push --force' outside project directory. Ask user for explicit permission." >&2
       exit 2
     fi
     # Destructive rails/rake subcommands
