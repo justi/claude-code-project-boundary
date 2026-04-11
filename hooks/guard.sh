@@ -167,12 +167,14 @@ tokenize_args() {
 # Usage: extract_option_value <short> <long>
 #   short: e.g. "-o", or "" to skip
 #   long:  e.g. "--output", or "" to skip
-# Supports: "-o value", "--output value", "--output=value"
-# If an option appears multiple times, returns the LAST match — this matches
-# the "last-wins" semantics of curl/wget/cp/mv/tar and prevents a bypass where
-# an attacker places an in-project value first and an outside value second
+# Supports: "-o value", "--output value", "--output=value".
+# Option flags are matched after stripping surrounding quotes so that
+# `curl "-o" /etc/passwd` also matches. If an option appears multiple times,
+# returns the LAST match — this matches the "last-wins" semantics of
+# curl/wget/cp/mv/tar and prevents a bypass where an attacker places an
+# in-project value first and an outside value second
 # (e.g. `curl -o $PROJECT/ok -o /etc/passwd`).
-# Echoes the value (quotes preserved — caller must expand_path).
+# Echoes the value (possibly with quotes — caller must expand_path).
 # Returns 0 if found, 1 otherwise.
 extract_option_value() {
   local short="$1"
@@ -820,6 +822,10 @@ check_single_command() {
     if [ $op_end -lt $tlen ] && [ "${rtok:$op_end:1}" = ">" ]; then
       op_end=$((op_end + 1))
     fi
+    # Also consume a trailing | (Bash clobber operator: >| or >>|).
+    if [ $op_end -lt $tlen ] && [ "${rtok:$op_end:1}" = "|" ]; then
+      op_end=$((op_end + 1))
+    fi
 
     # Extract target: rest of token if any, otherwise next token
     local rest="${rtok:$op_end}"
@@ -839,6 +845,12 @@ check_single_command() {
     fi
 
     if [ -n "$REDIR_TARGET" ]; then
+      # Block process substitution — `> >(cmd)` runs `cmd` which the guard
+      # cannot safely inspect, similar to nested shells.
+      if [[ "$REDIR_TARGET" == \(* ]] || [[ "$REDIR_TARGET" == \>\(* ]] || [[ "$REDIR_TARGET" == \<\(* ]]; then
+        echo "BLOCKED: Process substitution redirect '$REDIR_TARGET' cannot be safely inspected. Ask user for explicit permission." >&2
+        exit 2
+      fi
       REDIR_TARGET=$(expand_path "$REDIR_TARGET")
       if [[ "$REDIR_TARGET" != /* ]]; then
         REDIR_TARGET="$EFFECTIVE_CWD/$REDIR_TARGET"
@@ -938,8 +950,26 @@ split_and_check() {
         fi
       fi
 
-      # Check for ; or |
-      if [ "$ch" = ";" ] || [ "$ch" = "|" ]; then
+      # Check for ;
+      if [ "$ch" = ";" ]; then
+        subcmds+=("$current")
+        current=""
+        prev_ch="$ch"
+        i=$((i + 1))
+        continue
+      fi
+
+      # Check for | — but not if it's part of the Bash clobber operator >| or >>|
+      if [ "$ch" = "|" ]; then
+        # Look at the trailing chars of current (trimmed) to detect > or >>
+        local trimmed="${current%"${current##*[![:space:]]}"}"
+        if [[ "$trimmed" == *\> ]]; then
+          # Part of >| or >>| — keep it as a redirect operator, not a pipe
+          current="${current}${ch}"
+          prev_ch="$ch"
+          i=$((i + 1))
+          continue
+        fi
         subcmds+=("$current")
         current=""
         prev_ch="$ch"

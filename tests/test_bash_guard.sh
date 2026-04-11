@@ -1081,6 +1081,26 @@ expect_blocked 'mv with quoted -t flag' \
 expect_blocked 'cp with quoted --target-directory= value' \
   'cp "--target-directory=/etc" a.txt'
 
+# Bash clobber operator >| / >>| — | is part of the operator, not a pipe
+expect_blocked 'clobber >| to outside project' \
+  'echo x >| /etc/passwd'
+
+expect_blocked 'clobber >|file attached to outside' \
+  'echo x >|/etc/passwd'
+
+expect_blocked 'clobber >>| append to outside' \
+  'echo x >>| /etc/passwd'
+
+expect_allowed 'clobber >| inside project' \
+  "echo x >| \"$PROJECT/dir with space/out.txt\""
+
+# Process substitution > >(cmd) — uninspectable, must block
+expect_blocked 'process substitution > >(tee outside)' \
+  'echo x > >(tee /etc/passwd)'
+
+expect_blocked 'process substitution attached >(cmd)' \
+  'echo x >>(tee /etc/passwd)'
+
 echo ""
 
 # ============================================================
