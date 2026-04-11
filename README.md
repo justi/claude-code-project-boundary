@@ -56,7 +56,7 @@ Allows destructive operations **within your project** but blocks them **outside*
 
 ### Known limitations
 
-- Paths with spaces in project directory name are not fully supported (space-based argument splitting)
+- Paths with spaces work when properly quoted (single or double quotes). Unquoted paths with spaces are not supported.
 - `$()` subshells and backtick substitution inside arguments are not expanded
 
 ## Install
