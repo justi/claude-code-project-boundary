@@ -494,31 +494,83 @@ expect_blocked "curl --output ~/file" \
 echo ""
 
 # ============================================================
-# 30. Spaces in paths
+# 30. Spaces in paths (quoted — properly supported)
 # ============================================================
-echo "--- Spaces in paths ---"
+echo "--- Spaces in quoted paths ---"
 
-# NOTE: The guard uses simple space-splitting for argument extraction.
-# Paths with spaces inside quotes will be split into multiple arguments,
-# each checked independently. A path like "$PROJECT/path with spaces/file.txt"
-# gets split into "$PROJECT/path", "with", "spaces/file.txt".
-# The relative parts ("with", "spaces/file.txt") resolve inside the project,
-# so this correctly passes -- but only by coincidence of the relative path
-# resolution, not because the guard truly understands quoted paths with spaces.
-expect_allowed "rm path with spaces inside project (quoted)" \
-  "rm \"$PROJECT/path with spaces/file.txt\""
+# Set up a project directory with spaces in its path
+SPACE_PROJECT="$TMPDIR_BASE/my project/sub dir"
+mkdir -p "$SPACE_PROJECT"
+SAVED_PROJECT_DIR="$CLAUDE_PROJECT_DIR"
+export CLAUDE_PROJECT_DIR="$SPACE_PROJECT"
+
+# Double-quoted paths with spaces — all major commands
+expect_allowed "rm with spaces in project path (double quotes)" \
+  "rm \"$SPACE_PROJECT/file.txt\""
+
+expect_allowed "mv with spaces in project path (double quotes)" \
+  "mv \"$SPACE_PROJECT/a.txt\" \"$SPACE_PROJECT/b.txt\""
+
+expect_allowed "cp with spaces in project path (double quotes)" \
+  "cp \"$SPACE_PROJECT/a.txt\" \"$SPACE_PROJECT/b.txt\""
+
+expect_allowed "ln with spaces in project path (double quotes)" \
+  "ln -s \"$SPACE_PROJECT/a.txt\" \"$SPACE_PROJECT/b.txt\""
+
+expect_allowed "tee with spaces in project path (double quotes)" \
+  "echo hi | tee \"$SPACE_PROJECT/out.txt\""
+
+# Single-quoted paths with spaces
+expect_allowed "rm with spaces in project path (single quotes)" \
+  "rm '$SPACE_PROJECT/file.txt'"
+
+# Mixed: flags and quoted space path
+expect_allowed "rm -f with spaces in project path" \
+  "rm -f \"$SPACE_PROJECT/file.txt\""
+
+# Outside project should still block
+expect_blocked "mv from space project to /tmp (double quotes)" \
+  "mv \"$SPACE_PROJECT/a.txt\" \"/tmp/b.txt\""
+
+expect_blocked "rm outside project with spaces (double quotes)" \
+  "rm \"/tmp/my dir/file.txt\""
+
+# chmod/chown with quoted space paths
+expect_allowed "chmod with spaces in project path (double quotes)" \
+  "chmod 644 \"$SPACE_PROJECT/file.txt\""
+
+expect_blocked "chown with spaces outside project (double quotes)" \
+  "chown root \"/tmp/my dir/file.txt\""
+
+# install with quoted space paths
+expect_allowed "install with spaces in project path (double quotes)" \
+  "install -m 644 \"$SPACE_PROJECT/src.txt\" \"$SPACE_PROJECT/dst.txt\""
+
+# rsync with quoted space paths
+expect_allowed "rsync with spaces in project path (double quotes)" \
+  "rsync -av \"$SPACE_PROJECT/src/\" \"$SPACE_PROJECT/dst/\""
+
+# find with quoted space paths
+expect_allowed "find with spaces in project path (double quotes)" \
+  "find \"$SPACE_PROJECT\" -name '*.tmp' -delete"
+
+# cd with quoted space path
+expect_allowed "cd to space project path (double quotes)" \
+  "cd \"$SPACE_PROJECT\""
+
+# Restore original project dir
+export CLAUDE_PROJECT_DIR="$SAVED_PROJECT_DIR"
 
 echo ""
 
 # ============================================================
-# 31. resolve_path strips spaces (BUG: normalized="${normalized// //}")
+# 31. Spaces in paths — remaining limitation
 # ============================================================
-echo "--- Paths with spaces ---"
+echo "--- Spaces in paths (unquoted) ---"
 
-# KNOWN LIMITATION: Project paths with spaces are not fully supported.
-# The guard splits arguments on whitespace, so "my project/file.txt" becomes
-# two tokens: "my" and "project/file.txt". This is documented in README.
-echo "SKIP: paths with spaces in project dir (known limitation)"
+# Unquoted paths with spaces cannot be parsed correctly — this is inherent
+# to shell argument splitting and would require full shell-level parsing.
+echo "SKIP: unquoted paths with spaces remain unsupported (would require shell-level parsing)"
 
 echo ""
 

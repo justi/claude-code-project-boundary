@@ -109,6 +109,45 @@ expand_path() {
   echo "$p"
 }
 
+# --- Quote-aware argument tokenizer ---
+# Splits a string into tokens respecting single and double quotes.
+# Tokens are newline-separated on stdout with quotes preserved (expand_path strips them).
+tokenize_args() {
+  local input="$1"
+  local -a tokens=()
+  local current=""
+  local in_sq=0 in_dq=0
+  local i=0 len=${#input}
+
+  while [ $i -lt $len ]; do
+    local ch="${input:$i:1}"
+
+    if [ "$ch" = "'" ] && [ $in_dq -eq 0 ]; then
+      in_sq=$(( 1 - in_sq ))
+      current="${current}${ch}"
+    elif [ "$ch" = '"' ] && [ $in_sq -eq 0 ]; then
+      in_dq=$(( 1 - in_dq ))
+      current="${current}${ch}"
+    elif { [ "$ch" = ' ' ] || [ "$ch" = $'\t' ]; } && [ $in_sq -eq 0 ] && [ $in_dq -eq 0 ]; then
+      if [ -n "$current" ]; then
+        tokens+=("$current")
+        current=""
+      fi
+    else
+      current="${current}${ch}"
+    fi
+    i=$((i + 1))
+  done
+
+  if [ -n "$current" ]; then
+    tokens+=("$current")
+  fi
+
+  for t in "${tokens[@]}"; do
+    echo "$t"
+  done
+}
+
 # --- Check if a resolved path is inside the project directory ---
 is_inside_project() {
   local resolved="$1"
@@ -176,7 +215,10 @@ check_single_command() {
   # --- Block cd outside project followed by destructive commands ---
   if [[ "$CMD" =~ ^cd($|[[:space:]]) ]]; then
     local cd_target
-    cd_target=$(echo "$CMD" | awk '{print $2}')
+    # cd takes a single argument, so grab everything after 'cd ' as the target
+    # (including spaces if quoted). Not using tokenize_args because cd doesn't
+    # take multiple path arguments.
+    cd_target=$(echo "$CMD" | sed 's/^cd[[:space:]]*//')
     # cd with no args or cd ~ goes to $HOME
     if [[ -z "$cd_target" || "$cd_target" == "~" ]]; then
       cd_target="$HOME"
@@ -332,7 +374,8 @@ check_single_command() {
       local find_args
       find_args=$(echo "$CMD" | sed -E 's/.*find[[:space:]]+//')
       local past_options=0
-      for find_token in $find_args; do
+      while IFS= read -r find_token; do
+        [[ -z "$find_token" ]] && continue
         case "$find_token" in
           -L|-H|-P|-O*)
             [[ $past_options -eq 0 ]] && continue
@@ -342,7 +385,7 @@ check_single_command() {
             past_options=1
             find_paths+=("$find_token") ;;
         esac
-      done
+      done < <(tokenize_args "$find_args")
       [[ ${#find_paths[@]} -eq 0 ]] && find_paths=(".")
       for find_path in "${find_paths[@]}"; do
         find_path=$(expand_path "$find_path")
@@ -362,9 +405,11 @@ check_single_command() {
   # --- File deletion: allowed inside project, blocked outside ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])rm($|[[:space:]])'; then
     # Extract paths from rm command (skip flags)
-    PATHS=$(echo "$CMD" | grep -oE '(^|[[:space:]])rm[[:space:]]+.*' | sed 's/^[[:space:]]*rm[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
+    local rm_raw
+    rm_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rm[[:space:]]+.*' | sed 's/^[[:space:]]*rm[[:space:]]*//')
 
-    for TARGET in $PATHS; do
+    while IFS= read -r TARGET; do
+      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
       TARGET=$(expand_path "$TARGET")
       # Resolve to absolute path
       if [[ "$TARGET" != /* ]]; then
@@ -382,7 +427,7 @@ check_single_command() {
         echo "BLOCKED: Cannot delete the project root directory itself." >&2
         exit 2
       fi
-    done
+    done < <(tokenize_args "$rm_raw")
   fi
 
   # --- Moving files outside project ---
@@ -400,9 +445,11 @@ check_single_command() {
         exit 2
       fi
     fi
-    MV_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])mv[[:space:]]+.*' | sed 's/^[[:space:]]*mv[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
+    local mv_raw
+    mv_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])mv[[:space:]]+.*' | sed 's/^[[:space:]]*mv[[:space:]]*//')
 
-    for TARGET in $MV_ARGS; do
+    while IFS= read -r TARGET; do
+      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
         TARGET="$EFFECTIVE_CWD/$TARGET"
@@ -413,7 +460,7 @@ check_single_command() {
         echo "BLOCKED: 'mv' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
-    done
+    done < <(tokenize_args "$mv_raw")
   fi
 
   # --- cp command: check all non-flag arguments ---
@@ -431,9 +478,11 @@ check_single_command() {
         exit 2
       fi
     fi
-    CP_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])cp[[:space:]]+.*' | sed 's/^[[:space:]]*cp[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
+    local cp_raw
+    cp_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])cp[[:space:]]+.*' | sed 's/^[[:space:]]*cp[[:space:]]*//')
 
-    for TARGET in $CP_ARGS; do
+    while IFS= read -r TARGET; do
+      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
         TARGET="$EFFECTIVE_CWD/$TARGET"
@@ -444,14 +493,16 @@ check_single_command() {
         echo "BLOCKED: 'cp' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
-    done
+    done < <(tokenize_args "$cp_raw")
   fi
 
   # --- ln command: check all non-flag arguments ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])ln($|[[:space:]])'; then
-    LN_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])ln[[:space:]]+.*' | sed 's/^[[:space:]]*ln[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
+    local ln_raw
+    ln_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])ln[[:space:]]+.*' | sed 's/^[[:space:]]*ln[[:space:]]*//')
 
-    for TARGET in $LN_ARGS; do
+    while IFS= read -r TARGET; do
+      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
         TARGET="$EFFECTIVE_CWD/$TARGET"
@@ -462,14 +513,16 @@ check_single_command() {
         echo "BLOCKED: 'ln' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
-    done
+    done < <(tokenize_args "$ln_raw")
   fi
 
   # --- install command: like cp, check all non-flag path arguments ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])install($|[[:space:]])'; then
-    INSTALL_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
+    local install_raw
+    install_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//')
     # Skip mode arg (numeric, after -m/--mode), owner arg (after -o), group (after -g)
-    for TARGET in $INSTALL_ARGS; do
+    while IFS= read -r TARGET; do
+      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
       # Skip pure numeric (mode) or user:group patterns
       if [[ "$TARGET" =~ ^[0-9]+$ ]] || [[ "$TARGET" =~ ^[a-zA-Z_][a-zA-Z0-9_]*(:[a-zA-Z_][a-zA-Z0-9_]*)?$ ]]; then
         continue
@@ -483,13 +536,15 @@ check_single_command() {
         echo "BLOCKED: 'install' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
-    done
+    done < <(tokenize_args "$install_raw")
   fi
 
   # --- rsync command: check all non-flag path arguments ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])rsync($|[[:space:]])'; then
-    RSYNC_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
-    for TARGET in $RSYNC_ARGS; do
+    local rsync_raw
+    rsync_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//')
+    while IFS= read -r TARGET; do
+      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
       # Skip remote paths (user@host:/path or host:/path)
       if [[ "$TARGET" =~ : ]]; then
         continue
@@ -503,7 +558,7 @@ check_single_command() {
         echo "BLOCKED: 'rsync' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
-    done
+    done < <(tokenize_args "$rsync_raw")
   fi
 
   # --- tar: check -C / --directory=PATH for extraction ---
@@ -563,9 +618,11 @@ check_single_command() {
 
   # --- tee command: extract file arguments, block if outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])tee($|[[:space:]])'; then
-    TEE_ARGS=$(echo "$CMD" | grep -oE '(^|[[:space:]])tee[[:space:]]+.*' | sed 's/^[[:space:]]*tee[[:space:]]*//' | tr ' ' '\n' | grep -v '^-')
+    local tee_raw
+    tee_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])tee[[:space:]]+.*' | sed 's/^[[:space:]]*tee[[:space:]]*//')
 
-    for TARGET in $TEE_ARGS; do
+    while IFS= read -r TARGET; do
+      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
         TARGET="$EFFECTIVE_CWD/$TARGET"
@@ -576,7 +633,7 @@ check_single_command() {
         echo "BLOCKED: 'tee' targets '$RESOLVED' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
-    done
+    done < <(tokenize_args "$tee_raw")
   fi
 
   # --- curl -o / curl --output outside project ---
@@ -669,18 +726,16 @@ check_single_command() {
     if echo "$CMD" | grep -qE "(^|[[:space:]])${CMD_NAME}($|[[:space:]])"; then
       # Extract args after command name, skip flags, then skip the first
       # non-flag token (mode for chmod, owner[:group] for chown)
-      local all_args
-      all_args=$(echo "$CMD" | grep -oE "(^|[[:space:]])${CMD_NAME}[[:space:]]+.*" | sed "s/^[[:space:]]*${CMD_NAME}[[:space:]]*//" | tr ' ' '\n' | grep -v '^-')
+      local perm_raw
+      perm_raw=$(echo "$CMD" | grep -oE "(^|[[:space:]])${CMD_NAME}[[:space:]]+.*" | sed "s/^[[:space:]]*${CMD_NAME}[[:space:]]*//")
       local skipped_first=0
-      PATHS=""
-      for token in $all_args; do
+
+      while IFS= read -r TARGET; do
+        [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
         if [[ $skipped_first -eq 0 ]]; then
           skipped_first=1
           continue
         fi
-        PATHS="$PATHS $token"
-      done
-      for TARGET in $PATHS; do
         TARGET=$(expand_path "$TARGET")
         if [[ "$TARGET" != /* ]]; then
           TARGET="$EFFECTIVE_CWD/$TARGET"
@@ -691,7 +746,7 @@ check_single_command() {
           echo "BLOCKED: '${CMD_NAME}' targets '$RESOLVED' which is OUTSIDE project directory. Ask user for explicit permission." >&2
           exit 2
         fi
-      done
+      done < <(tokenize_args "$perm_raw")
     fi
   done
 }
