@@ -734,6 +734,58 @@ expect_blocked "/usr/bin/env bash -c nested shell" \
 echo ""
 
 # ============================================================
+# 39b. Command substitution (fixes #9 item 1)
+# ============================================================
+echo "--- Command substitution \$() and backticks ---"
+
+# $(...) — expanded by bash, uninspectable → block
+expect_blocked 'rm "$(...)" double-quoted substitution' \
+  'rm "$(echo /etc/passwd)"'
+
+expect_blocked 'rm $(...) unquoted substitution' \
+  'rm $(echo /etc/passwd)'
+
+expect_blocked 'curl -o "$(...)" substitution in option' \
+  'curl -o "$(echo /etc/passwd)" http://x'
+
+expect_blocked 'redirect > "$(...)" substitution in target' \
+  'echo hi > "$(echo /etc/passwd)"'
+
+# Backticks — also expanded, uninspectable
+expect_blocked 'rm `...` backtick substitution' \
+  'rm `echo /etc/passwd`'
+
+expect_blocked 'rm "`...`" double-quoted backticks' \
+  'rm "`echo /etc/passwd`"'
+
+# Single-quoted substitution is literal — allowed
+expect_allowed "rm '\$(...)' single-quoted literal" \
+  "rm '\$(echo /etc/passwd)'"
+
+expect_allowed "rm '\`...\`' single-quoted backticks literal" \
+  "rm '\`echo safe\`'"
+
+# Escaped \$( is literal
+expect_allowed 'echo \$(literal) escaped dollar' \
+  'echo \$(literal)'
+
+# Single quotes inside double quotes are literal, not delimiters
+expect_blocked "rm \"'\$(...)'\" single quotes literal inside double" \
+  "rm \"'\$(echo /etc/passwd)'\""
+
+# Arithmetic expansion $((...)) must not be blocked
+expect_allowed 'echo $((2+2)) arithmetic expansion' \
+  'echo $((2+2))'
+
+expect_allowed 'echo $((1+2*3)) complex arithmetic' \
+  'echo $((1+2*3))'
+
+expect_allowed 'redirect with arithmetic expansion' \
+  "echo \$((x+1)) > \"$PROJECT/out.txt\""
+
+echo ""
+
+# ============================================================
 # 40. Pipe to sh/bash with args (sh -s, /bin/sh)
 # ============================================================
 echo "--- Pipe to shell variants ---"
