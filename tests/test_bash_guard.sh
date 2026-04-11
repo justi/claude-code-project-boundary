@@ -1036,6 +1036,22 @@ expect_blocked 'mv repeated -t last wins to outside' \
 expect_blocked 'cp repeated --target-directory last wins to outside' \
   "cp --target-directory \"$PROJECT\" --target-directory /etc a.txt"
 
+# Attached-form redirects (no whitespace before >)
+expect_blocked 'redirect x>file no whitespace traversal' \
+  "echo x>/etc/passwd"
+
+expect_blocked 'redirect x>>file no whitespace traversal' \
+  "echo x>>/etc/passwd"
+
+expect_blocked 'redirect "x">file quoted no whitespace' \
+  'echo "x">/etc/passwd'
+
+expect_blocked 'redirect x>file attached to token with quoted space path' \
+  "echo x>\"$PROJECT/safe /../../etc/passwd\""
+
+expect_allowed 'redirect x>file no whitespace inside project' \
+  "echo x>\"$PROJECT/dir with space/out.txt\""
+
 echo ""
 
 # ============================================================

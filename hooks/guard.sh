@@ -763,49 +763,58 @@ check_single_command() {
   fi
 
   # --- Writing to files outside project via redirection ---
-  # Walk tokens to find redirect targets. Handles:
-  #   > file, >> file, >file, >>file
-  #   1> file, 2> file, 1>file, 2>>file
-  #   &> file, &>file, &>>file
-  # Skips fd-to-fd redirects like 2>&1.
+  # Walk tokens and scan each one for an unquoted > operator anywhere
+  # (not just at the start). This catches both separated forms (`> file`,
+  # `2>> file`) and attached forms (`>file`, `x>file`, `"a">file`).
+  # Skips fd-to-fd redirects like 2>&1 (target starts with &).
   local ri=0 rn=${#CMD_TOKENS[@]}
   while [ $ri -lt $rn ]; do
     local rtok="${CMD_TOKENS[$ri]}"
     local REDIR_TARGET=""
-    local rest=""
-    local matched=0
 
-    if [[ "$rtok" =~ ^[0-9]+(\>\>?)(.*)$ ]]; then
-      rest="${BASH_REMATCH[2]}"
-      matched=1
-    elif [[ "$rtok" =~ ^\&(\>\>?)(.*)$ ]]; then
-      rest="${BASH_REMATCH[2]}"
-      matched=1
-    elif [[ "$rtok" =~ ^(\>\>?)(.*)$ ]]; then
-      rest="${BASH_REMATCH[2]}"
-      matched=1
-    fi
-
-    if [ "$matched" -eq 1 ]; then
-      if [ -z "$rest" ]; then
-        # Separated form: target is next token
-        if [ $((ri + 1)) -lt $rn ]; then
-          REDIR_TARGET="${CMD_TOKENS[$((ri + 1))]}"
-          ri=$((ri + 2))
-        else
-          ri=$((ri + 1))
-        fi
-      elif [[ "$rest" == \&* ]]; then
-        # fd-to-fd redirect like 2>&1, no file target
-        ri=$((ri + 1))
-      else
-        # Attached form: rest is the file
-        REDIR_TARGET="$rest"
-        ri=$((ri + 1))
+    # Scan the token for an unquoted > (respecting ' and " quotes)
+    local j=0 tlen=${#rtok}
+    local tin_sq=0 tin_dq=0
+    local redir_pos=-1
+    while [ $j -lt $tlen ]; do
+      local tc="${rtok:$j:1}"
+      if [ "$tc" = "'" ] && [ $tin_dq -eq 0 ]; then
+        tin_sq=$(( 1 - tin_sq ))
+      elif [ "$tc" = '"' ] && [ $tin_sq -eq 0 ]; then
+        tin_dq=$(( 1 - tin_dq ))
+      elif [ "$tc" = ">" ] && [ $tin_sq -eq 0 ] && [ $tin_dq -eq 0 ]; then
+        redir_pos=$j
+        break
       fi
-    else
+      j=$((j + 1))
+    done
+
+    if [ $redir_pos -lt 0 ]; then
       ri=$((ri + 1))
       continue
+    fi
+
+    # Found > at redir_pos. Extend past a second > if present (>>).
+    local op_end=$((redir_pos + 1))
+    if [ $op_end -lt $tlen ] && [ "${rtok:$op_end:1}" = ">" ]; then
+      op_end=$((op_end + 1))
+    fi
+
+    # Extract target: rest of token if any, otherwise next token
+    local rest="${rtok:$op_end}"
+    if [ -z "$rest" ]; then
+      if [ $((ri + 1)) -lt $rn ]; then
+        REDIR_TARGET="${CMD_TOKENS[$((ri + 1))]}"
+        ri=$((ri + 2))
+      else
+        ri=$((ri + 1))
+      fi
+    elif [[ "$rest" == \&* ]]; then
+      # fd-to-fd redirect like 2>&1, no file target
+      ri=$((ri + 1))
+    else
+      REDIR_TARGET="$rest"
+      ri=$((ri + 1))
     fi
 
     if [ -n "$REDIR_TARGET" ]; then
