@@ -153,30 +153,40 @@ tokenize_args() {
 #   short: e.g. "-o", or "" to skip
 #   long:  e.g. "--output", or "" to skip
 # Supports: "-o value", "--output value", "--output=value"
+# If an option appears multiple times, returns the LAST match — this matches
+# the "last-wins" semantics of curl/wget/cp/mv/tar and prevents a bypass where
+# an attacker places an in-project value first and an outside value second
+# (e.g. `curl -o $PROJECT/ok -o /etc/passwd`).
 # Echoes the value (quotes preserved — caller must expand_path).
 # Returns 0 if found, 1 otherwise.
 extract_option_value() {
   local short="$1"
   local long="$2"
   local i=0 n=${#CMD_TOKENS[@]}
+  local found=1
+  local value=""
   while [ $i -lt $n ]; do
     local tok="${CMD_TOKENS[$i]}"
     if [ -n "$short" ] && [ "$tok" = "$short" ] && [ $((i + 1)) -lt $n ]; then
-      echo "${CMD_TOKENS[$((i + 1))]}"
-      return 0
+      value="${CMD_TOKENS[$((i + 1))]}"
+      found=0
     fi
     if [ -n "$long" ]; then
       if [ "$tok" = "$long" ] && [ $((i + 1)) -lt $n ]; then
-        echo "${CMD_TOKENS[$((i + 1))]}"
-        return 0
+        value="${CMD_TOKENS[$((i + 1))]}"
+        found=0
       fi
       if [[ "$tok" == "${long}="* ]]; then
-        echo "${tok#${long}=}"
-        return 0
+        value="${tok#${long}=}"
+        found=0
       fi
     fi
     i=$((i + 1))
   done
+  if [ $found -eq 0 ]; then
+    echo "$value"
+    return 0
+  fi
   return 1
 }
 

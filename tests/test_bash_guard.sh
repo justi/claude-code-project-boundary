@@ -908,6 +908,9 @@ expect_blocked 'wget -O quoted space traversal' \
 expect_blocked 'wget --output-document= quoted space traversal' \
   "wget --output-document=\"$PROJECT/safe /../../etc/passwd\" http://x"
 
+expect_blocked 'wget --output-document quoted space traversal (separated)' \
+  "wget --output-document \"$PROJECT/safe /../../etc/passwd\" http://x"
+
 expect_allowed 'wget -O quoted space inside project' \
   "wget -O \"$PROJECT/dir with space/out.txt\" http://x"
 
@@ -943,8 +946,14 @@ expect_allowed 'dd of= quoted space inside project' \
 expect_blocked 'mv --target-directory= quoted space traversal' \
   "mv --target-directory=\"$PROJECT/safe /../../tmp\" a.txt"
 
+expect_blocked 'mv --target-directory quoted space traversal (separated)' \
+  "mv --target-directory \"$PROJECT/safe /../../tmp\" a.txt"
+
 expect_blocked 'cp --target-directory= quoted space traversal' \
   "cp --target-directory=\"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_blocked 'cp --target-directory quoted space traversal (separated)' \
+  "cp --target-directory \"$PROJECT/safe /../../tmp\" a.txt"
 
 expect_blocked 'mv -t quoted space traversal' \
   "mv -t \"$PROJECT/safe /../../tmp\" a.txt"
@@ -1006,6 +1015,26 @@ expect_blocked 'dd repeated of= last wins to outside' \
 
 expect_blocked 'dd repeated of= first inside, second outside' \
   "dd if=/dev/zero of=\"$PROJECT/dir with space/ok\" of=/etc/passwd"
+
+# Repeated -o/-O/-t options with last-wins bypass: extract_option_value
+# must return the LAST match so the effective value is validated.
+expect_blocked 'curl repeated -o last wins to outside' \
+  "curl -o \"$PROJECT/ok.txt\" -o /etc/passwd http://x"
+
+expect_blocked 'curl repeated --output last wins to outside' \
+  "curl --output \"$PROJECT/ok.txt\" --output /etc/passwd http://x"
+
+expect_blocked 'wget repeated -O last wins to outside' \
+  "wget -O \"$PROJECT/ok.txt\" -O /etc/passwd http://x"
+
+expect_blocked 'wget repeated --output-document last wins to outside' \
+  "wget --output-document \"$PROJECT/ok.txt\" --output-document /etc/passwd http://x"
+
+expect_blocked 'mv repeated -t last wins to outside' \
+  "mv -t \"$PROJECT\" -t /etc a.txt"
+
+expect_blocked 'cp repeated --target-directory last wins to outside' \
+  "cp --target-directory \"$PROJECT\" --target-directory /etc a.txt"
 
 echo ""
 
