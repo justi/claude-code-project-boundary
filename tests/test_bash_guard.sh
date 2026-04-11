@@ -1101,6 +1101,27 @@ expect_blocked 'process substitution > >(tee outside)' \
 expect_blocked 'process substitution attached >(cmd)' \
   'echo x >>(tee /etc/passwd)'
 
+# Positional curl -o: validate EVERY occurrence, not just last
+expect_blocked 'curl positional -o first outside second inside' \
+  "curl -o /etc/passwd http://a -o \"$PROJECT/out\" http://b"
+
+expect_blocked 'curl positional -o first inside second outside' \
+  "curl -o \"$PROJECT/out\" http://a -o /etc/passwd http://b"
+
+expect_allowed 'curl positional -o both inside project' \
+  "curl -o \"$PROJECT/a\" http://a -o \"$PROJECT/b\" http://b"
+
+# Positional wget -O (same semantics concern)
+expect_blocked 'wget positional -O first outside second inside' \
+  "wget -O /etc/passwd http://a -O \"$PROJECT/out\" http://b"
+
+# Backslash-escaped > is a literal, not a redirect
+expect_allowed 'backslash-escaped > not a redirect' \
+  'echo \>/etc/passwd'
+
+expect_allowed 'backslash-escaped >> not a redirect' \
+  'echo \>\>/etc/passwd'
+
 echo ""
 
 # ============================================================
