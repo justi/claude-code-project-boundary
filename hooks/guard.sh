@@ -277,10 +277,12 @@ check_single_command() {
   # --- Block command substitution outside single quotes ---
   # `$(...)` and backticks are expanded by bash (even inside double quotes),
   # so the guard cannot know the final target. Single quotes keep them literal,
-  # so only block when they appear outside single quotes. Similar rationale to
-  # blocking `bash -c` / `eval` — the inner command is uninspectable.
+  # so only block when they appear outside single quotes. Arithmetic expansion
+  # `$((...))` is allowed — it's a numeric computation, not a command.
+  # Similar rationale to blocking `bash -c` / `eval` — the inner command is
+  # uninspectable.
   local ci=0 clen=${#CMD}
-  local cin_sq=0 cin_esc=0
+  local cin_sq=0 cin_dq=0 cin_esc=0
   while [ $ci -lt $clen ]; do
     local cc="${CMD:$ci:1}"
     if [ $cin_esc -eq 1 ]; then
@@ -293,8 +295,15 @@ check_single_command() {
       ci=$((ci + 1))
       continue
     fi
-    if [ "$cc" = "'" ]; then
+    # Single quotes are only delimiters when NOT inside double quotes
+    if [ "$cc" = "'" ] && [ $cin_dq -eq 0 ]; then
       cin_sq=$(( 1 - cin_sq ))
+      ci=$((ci + 1))
+      continue
+    fi
+    # Double quotes are only delimiters when NOT inside single quotes
+    if [ "$cc" = '"' ] && [ $cin_sq -eq 0 ]; then
+      cin_dq=$(( 1 - cin_dq ))
       ci=$((ci + 1))
       continue
     fi
@@ -304,8 +313,11 @@ check_single_command() {
         exit 2
       fi
       if [ "$cc" = "\$" ] && [ $((ci + 1)) -lt $clen ] && [ "${CMD:$((ci + 1)):1}" = "(" ]; then
-        echo "BLOCKED: Command substitution '\$(...)' cannot be safely inspected. Ask user for explicit permission." >&2
-        exit 2
+        # Skip arithmetic expansion $((...)): next-next char is also (
+        if [ $((ci + 2)) -ge $clen ] || [ "${CMD:$((ci + 2)):1}" != "(" ]; then
+          echo "BLOCKED: Command substitution '\$(...)' cannot be safely inspected. Ask user for explicit permission." >&2
+          exit 2
+        fi
       fi
     fi
     ci=$((ci + 1))

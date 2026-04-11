@@ -769,6 +769,20 @@ expect_allowed "rm '\`...\`' single-quoted backticks literal" \
 expect_allowed 'echo \$(literal) escaped dollar' \
   'echo \$(literal)'
 
+# Single quotes inside double quotes are literal, not delimiters
+expect_blocked 'rm "\x27$(...)\x27" single quotes literal inside double' \
+  "rm \"'\$(echo /etc/passwd)'\""
+
+# Arithmetic expansion $((...)) must not be blocked
+expect_allowed 'echo $((2+2)) arithmetic expansion' \
+  'echo $((2+2))'
+
+expect_allowed 'echo $((1+2*3)) complex arithmetic' \
+  'echo $((1+2*3))'
+
+expect_allowed 'redirect with arithmetic expansion' \
+  "echo \$((x+1)) > \"$PROJECT/out.txt\""
+
 echo ""
 
 # ============================================================
