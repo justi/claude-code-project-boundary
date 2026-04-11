@@ -41,7 +41,7 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `eval '...'` | Cannot safely parse evaluated code |
 | Piping to `sh` / `bash` | Inner commands invisible to guard |
 | `xargs rm/mv/cp/...` | Arguments cannot be validated |
-| `$(...)` / backticks (outside single quotes) | Command substitution target is uninspectable |
+| `$(...)` / backticks (outside single quotes) | Command substitution target is uninspectable. Single-quoted forms like `'$(cmd)'` and arithmetic expansion `$((2+2))` are allowed. |
 
 ### Additional protections
 
