@@ -1052,6 +1052,35 @@ expect_blocked 'redirect x>file attached to token with quoted space path' \
 expect_allowed 'redirect x>file no whitespace inside project' \
   "echo x>\"$PROJECT/dir with space/out.txt\""
 
+# Quoted option flags: tokenize_args preserves quotes, so flag matching
+# must strip them first. Otherwise curl "-o" /etc/passwd bypasses.
+expect_blocked 'curl with quoted -o flag' \
+  'curl "-o" /etc/passwd http://x'
+
+expect_blocked 'curl with quoted --output flag' \
+  'curl "--output" /etc/passwd http://x'
+
+expect_blocked 'curl with quoted --output=value' \
+  'curl "--output=/etc/passwd" http://x'
+
+expect_blocked 'wget with quoted -O flag' \
+  'wget "-O" /etc/passwd http://x'
+
+expect_blocked 'tar with quoted -C flag' \
+  'tar "-C" /etc -xf a.tar'
+
+expect_blocked 'tar with quoted --directory= value' \
+  'tar "--directory=/etc" -xf a.tar'
+
+expect_blocked 'dd with quoted of= token' \
+  'dd if=/dev/zero "of=/etc/passwd"'
+
+expect_blocked 'mv with quoted -t flag' \
+  'mv "-t" /etc a.txt'
+
+expect_blocked 'cp with quoted --target-directory= value' \
+  'cp "--target-directory=/etc" a.txt'
+
 echo ""
 
 # ============================================================

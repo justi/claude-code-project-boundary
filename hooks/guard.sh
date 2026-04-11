@@ -88,6 +88,21 @@ if [[ "$EFFECTIVE_CWD_RESOLVED/" != "$PROJECT_DIR/"* ]]; then
   CWD_OUTSIDE_PROJECT=1
 fi
 
+# --- Strip one layer of surrounding quotes (single or double) ---
+# Used before matching option flags like `-o` / `--output` against tokens,
+# since tokenize_args preserves quotes: `curl "-o" file` → token `"-o"`.
+strip_quotes() {
+  local p="$1"
+  if [[ "$p" == \"*\" ]]; then
+    p="${p#\"}"
+    p="${p%\"}"
+  elif [[ "$p" == \'*\' ]]; then
+    p="${p#\'}"
+    p="${p%\'}"
+  fi
+  echo "$p"
+}
+
 # --- Expand ~ and $HOME in a command argument ---
 expand_path() {
   local p="$1"
@@ -166,7 +181,10 @@ extract_option_value() {
   local found=1
   local value=""
   while [ $i -lt $n ]; do
-    local tok="${CMD_TOKENS[$i]}"
+    local raw_tok="${CMD_TOKENS[$i]}"
+    # Strip surrounding quotes before matching so `curl "-o" file` works
+    local tok
+    tok=$(strip_quotes "$raw_tok")
     if [ -n "$short" ] && [ "$tok" = "$short" ] && [ $((i + 1)) -lt $n ]; then
       value="${CMD_TOKENS[$((i + 1))]}"
       found=0
@@ -616,7 +634,8 @@ check_single_command() {
   if echo "$CMD" | grep -qE '(^|[[:space:]])tar($|[[:space:]])'; then
     local ti=0 tn=${#CMD_TOKENS[@]}
     while [ $ti -lt $tn ]; do
-      local ttok="${CMD_TOKENS[$ti]}"
+      local ttok
+      ttok=$(strip_quotes "${CMD_TOKENS[$ti]}")
       local tar_dir=""
       if [ "$ttok" = "-C" ] || [ "$ttok" = "--directory" ]; then
         if [ $((ti + 1)) -lt $tn ]; then
@@ -743,7 +762,9 @@ check_single_command() {
   # dd accepts repeated key=value operands and the last one wins, so we must
   # validate every of= occurrence — not just the first.
   if echo "$CMD" | grep -qE '(^|[[:space:]])dd($|[[:space:]])'; then
-    for tok in "${CMD_TOKENS[@]}"; do
+    for raw_tok in "${CMD_TOKENS[@]}"; do
+      local tok
+      tok=$(strip_quotes "$raw_tok")
       if [[ "$tok" == of=* ]]; then
         local dd_output="${tok#of=}"
         if [ -n "$dd_output" ]; then
