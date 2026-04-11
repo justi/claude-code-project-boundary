@@ -41,6 +41,7 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `eval '...'` | Cannot safely parse evaluated code |
 | Piping to `sh` / `bash` | Inner commands invisible to guard |
 | `xargs rm/mv/cp/...` | Arguments cannot be validated |
+| `$(...)` / backticks (outside single quotes) | Command substitution target is uninspectable |
 
 ### Additional protections
 
@@ -57,7 +58,9 @@ Allows destructive operations **within your project** but blocks them **outside*
 ### Known limitations
 
 - Paths with spaces work when properly quoted (single or double quotes). Unquoted paths with spaces are not supported.
-- `$()` subshells and backtick substitution inside arguments are not expanded
+- Heredoc body contents are not inspected (only the first line of the command, where redirects are handled normally)
+- Brace expansion (`{a,b,c}`) is not enumerated — literal match only
+- `~user/` (home of another user) is not expanded; only `~/` (current user) is handled
 
 ## Install
 

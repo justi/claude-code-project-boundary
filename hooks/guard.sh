@@ -274,6 +274,43 @@ check_single_command() {
     CMD_TOKENS+=("$tok")
   done < <(tokenize_args "$CMD")
 
+  # --- Block command substitution outside single quotes ---
+  # `$(...)` and backticks are expanded by bash (even inside double quotes),
+  # so the guard cannot know the final target. Single quotes keep them literal,
+  # so only block when they appear outside single quotes. Similar rationale to
+  # blocking `bash -c` / `eval` — the inner command is uninspectable.
+  local ci=0 clen=${#CMD}
+  local cin_sq=0 cin_esc=0
+  while [ $ci -lt $clen ]; do
+    local cc="${CMD:$ci:1}"
+    if [ $cin_esc -eq 1 ]; then
+      cin_esc=0
+      ci=$((ci + 1))
+      continue
+    fi
+    if [ "$cc" = "\\" ] && [ $cin_sq -eq 0 ]; then
+      cin_esc=1
+      ci=$((ci + 1))
+      continue
+    fi
+    if [ "$cc" = "'" ]; then
+      cin_sq=$(( 1 - cin_sq ))
+      ci=$((ci + 1))
+      continue
+    fi
+    if [ $cin_sq -eq 0 ]; then
+      if [ "$cc" = "\`" ]; then
+        echo "BLOCKED: Command substitution with backticks cannot be safely inspected. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      if [ "$cc" = "\$" ] && [ $((ci + 1)) -lt $clen ] && [ "${CMD:$((ci + 1)):1}" = "(" ]; then
+        echo "BLOCKED: Command substitution '\$(...)' cannot be safely inspected. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
+    ci=$((ci + 1))
+  done
+
   # --- Block cd outside project followed by destructive commands ---
   if [[ "$CMD" =~ ^cd($|[[:space:]]) ]]; then
     local cd_target
