@@ -600,22 +600,41 @@ check_single_command() {
     done < <(tokenize_args "$rsync_raw")
   fi
 
-  # --- tar: check -C / --directory=PATH for extraction ---
+  # --- tar: check every -C / --directory=PATH for extraction ---
+  # tar allows multiple -C switches and the *last* one wins, so we must
+  # validate every occurrence — not just the first.
   if echo "$CMD" | grep -qE '(^|[[:space:]])tar($|[[:space:]])'; then
-    local tar_dir
-    tar_dir=$(extract_option_value "-C" "--directory" || true)
-    if [ -n "$tar_dir" ]; then
-      tar_dir=$(expand_path "$tar_dir")
-      if [[ "$tar_dir" != /* ]]; then
-        tar_dir="$EFFECTIVE_CWD/$tar_dir"
+    local ti=0 tn=${#CMD_TOKENS[@]}
+    while [ $ti -lt $tn ]; do
+      local ttok="${CMD_TOKENS[$ti]}"
+      local tar_dir=""
+      if [ "$ttok" = "-C" ] || [ "$ttok" = "--directory" ]; then
+        if [ $((ti + 1)) -lt $tn ]; then
+          tar_dir="${CMD_TOKENS[$((ti + 1))]}"
+          ti=$((ti + 2))
+        else
+          ti=$((ti + 1))
+        fi
+      elif [[ "$ttok" == "--directory="* ]]; then
+        tar_dir="${ttok#--directory=}"
+        ti=$((ti + 1))
+      else
+        ti=$((ti + 1))
+        continue
       fi
-      local resolved_tar
-      resolved_tar=$(resolve_path "$tar_dir")
-      if ! is_inside_project "$resolved_tar"; then
-        echo "BLOCKED: 'tar -C' targets '$resolved_tar' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
+      if [ -n "$tar_dir" ]; then
+        tar_dir=$(expand_path "$tar_dir")
+        if [[ "$tar_dir" != /* ]]; then
+          tar_dir="$EFFECTIVE_CWD/$tar_dir"
+        fi
+        local resolved_tar
+        resolved_tar=$(resolve_path "$tar_dir")
+        if ! is_inside_project "$resolved_tar"; then
+          echo "BLOCKED: 'tar -C' targets '$resolved_tar' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
       fi
-    fi
+    done
   fi
 
   # --- unzip -d PATH ---
@@ -711,57 +730,74 @@ check_single_command() {
   fi
 
   # --- dd of= outside project ---
+  # dd accepts repeated key=value operands and the last one wins, so we must
+  # validate every of= occurrence — not just the first.
   if echo "$CMD" | grep -qE '(^|[[:space:]])dd($|[[:space:]])'; then
-    local dd_output=""
-    # dd uses key=value syntax, not standard long options — walk tokens directly
     for tok in "${CMD_TOKENS[@]}"; do
       if [[ "$tok" == of=* ]]; then
-        dd_output="${tok#of=}"
-        break
+        local dd_output="${tok#of=}"
+        if [ -n "$dd_output" ]; then
+          dd_output=$(expand_path "$dd_output")
+          if [[ "$dd_output" != /* ]]; then
+            dd_output="$EFFECTIVE_CWD/$dd_output"
+          fi
+          local resolved_dd
+          resolved_dd=$(resolve_path "$dd_output")
+          if ! is_inside_project "$resolved_dd"; then
+            echo "BLOCKED: 'dd' output '$resolved_dd' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+            exit 2
+          fi
+        fi
       fi
     done
-    if [ -n "$dd_output" ]; then
-      dd_output=$(expand_path "$dd_output")
-      if [[ "$dd_output" != /* ]]; then
-        dd_output="$EFFECTIVE_CWD/$dd_output"
-      fi
-      local resolved_dd
-      resolved_dd=$(resolve_path "$dd_output")
-      if ! is_inside_project "$resolved_dd"; then
-        echo "BLOCKED: 'dd' output '$resolved_dd' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
-    fi
   fi
 
-  # --- Writing to files outside project via redirection (> and >>) ---
-  # Walk tokens to find redirect targets. Handles: > file, >> file, >file, >>file
+  # --- Writing to files outside project via redirection ---
+  # Walk tokens to find redirect targets. Handles:
+  #   > file, >> file, >file, >>file
+  #   1> file, 2> file, 1>file, 2>>file
+  #   &> file, &>file, &>>file
+  # Skips fd-to-fd redirects like 2>&1.
   local ri=0 rn=${#CMD_TOKENS[@]}
   while [ $ri -lt $rn ]; do
     local rtok="${CMD_TOKENS[$ri]}"
     local REDIR_TARGET=""
-    case "$rtok" in
-      '>'|'>>')
+    local rest=""
+    local matched=0
+
+    if [[ "$rtok" =~ ^[0-9]+(\>\>?)(.*)$ ]]; then
+      rest="${BASH_REMATCH[2]}"
+      matched=1
+    elif [[ "$rtok" =~ ^\&(\>\>?)(.*)$ ]]; then
+      rest="${BASH_REMATCH[2]}"
+      matched=1
+    elif [[ "$rtok" =~ ^(\>\>?)(.*)$ ]]; then
+      rest="${BASH_REMATCH[2]}"
+      matched=1
+    fi
+
+    if [ "$matched" -eq 1 ]; then
+      if [ -z "$rest" ]; then
+        # Separated form: target is next token
         if [ $((ri + 1)) -lt $rn ]; then
           REDIR_TARGET="${CMD_TOKENS[$((ri + 1))]}"
           ri=$((ri + 2))
         else
           ri=$((ri + 1))
         fi
-        ;;
-      '>>'*)
-        REDIR_TARGET="${rtok#>>}"
+      elif [[ "$rest" == \&* ]]; then
+        # fd-to-fd redirect like 2>&1, no file target
         ri=$((ri + 1))
-        ;;
-      '>'*)
-        REDIR_TARGET="${rtok#>}"
+      else
+        # Attached form: rest is the file
+        REDIR_TARGET="$rest"
         ri=$((ri + 1))
-        ;;
-      *)
-        ri=$((ri + 1))
-        continue
-        ;;
-    esac
+      fi
+    else
+      ri=$((ri + 1))
+      continue
+    fi
+
     if [ -n "$REDIR_TARGET" ]; then
       REDIR_TARGET=$(expand_path "$REDIR_TARGET")
       if [[ "$REDIR_TARGET" != /* ]]; then

@@ -965,6 +965,48 @@ expect_blocked 'redirect >> quoted space traversal' \
 expect_allowed 'redirect > quoted space inside project' \
   "echo x > \"$PROJECT/dir with space/out.txt\""
 
+# fd-prefixed redirects: 1>, 2>, 2>>, &>, &>>
+expect_blocked 'redirect 1> quoted space traversal' \
+  "echo x 1> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect 2> quoted space traversal' \
+  "echo x 2> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect 2>> quoted space traversal' \
+  "echo x 2>> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect &> quoted space traversal' \
+  "echo x &> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect 2>file attached form outside project' \
+  "echo x 2>/etc/passwd"
+
+expect_allowed 'redirect 2> inside project' \
+  "echo x 2> \"$PROJECT/dir with space/err.txt\""
+
+expect_allowed 'redirect &> inside project' \
+  "echo x &> \"$PROJECT/dir with space/all.txt\""
+
+# fd-to-fd redirect must not be treated as a file target
+expect_allowed 'redirect 2>&1 (fd-to-fd, not a file)' \
+  "echo x 2>&1"
+
+# Repeated options: last one wins — must validate all occurrences
+expect_blocked 'tar repeated -C last wins to outside' \
+  "tar -C \"$PROJECT\" -C /etc -xf archive.tar"
+
+expect_blocked 'tar repeated -C first inside, second outside' \
+  "tar -C \"$PROJECT/dir with space\" -C /tmp -xf archive.tar"
+
+expect_allowed 'tar repeated -C both inside project' \
+  "tar -C \"$PROJECT\" -C \"$PROJECT/dir with space\" -xf archive.tar"
+
+expect_blocked 'dd repeated of= last wins to outside' \
+  "dd if=/dev/zero of=\"$PROJECT/ok\" of=/etc/passwd"
+
+expect_blocked 'dd repeated of= first inside, second outside' \
+  "dd if=/dev/zero of=\"$PROJECT/dir with space/ok\" of=/etc/passwd"
+
 echo ""
 
 # ============================================================
