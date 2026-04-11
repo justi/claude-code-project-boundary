@@ -880,6 +880,94 @@ expect_allowed "rsync inside project" \
 echo ""
 
 # ============================================================
+# 45d. Option extractors with quoted space + traversal (#6)
+# ============================================================
+echo "--- Option extractors: quoted space + traversal ---"
+
+# Set up a subdir inside project so prefix matches before traversal
+mkdir -p "$PROJECT/safe"
+mkdir -p "$PROJECT/dir with space"
+
+# curl -o / --output / --output=
+expect_blocked 'curl -o quoted space traversal' \
+  "curl -o \"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_blocked 'curl --output quoted space traversal' \
+  "curl --output \"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_blocked 'curl --output= quoted space traversal' \
+  "curl --output=\"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_allowed 'curl -o quoted space inside project' \
+  "curl -o \"$PROJECT/dir with space/out.txt\" http://x"
+
+# wget -O / --output-document / --output-document=
+expect_blocked 'wget -O quoted space traversal' \
+  "wget -O \"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_blocked 'wget --output-document= quoted space traversal' \
+  "wget --output-document=\"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_allowed 'wget -O quoted space inside project' \
+  "wget -O \"$PROJECT/dir with space/out.txt\" http://x"
+
+# tar -C / --directory / --directory=
+expect_blocked 'tar -C quoted space traversal' \
+  "tar -C \"$PROJECT/safe /../../etc\" -xf a.tar"
+
+expect_blocked 'tar --directory= quoted space traversal' \
+  "tar --directory=\"$PROJECT/safe /../../etc\" -xf a.tar"
+
+expect_allowed 'tar -C quoted space inside project' \
+  "tar -C \"$PROJECT/dir with space\" -xf a.tar"
+
+# unzip -d
+expect_blocked 'unzip -d quoted space traversal' \
+  "unzip -d \"$PROJECT/safe /../../etc\" a.zip"
+
+expect_allowed 'unzip -d quoted space inside project' \
+  "unzip -d \"$PROJECT/dir with space\" a.zip"
+
+# cpio -D
+expect_blocked 'cpio -D quoted space traversal' \
+  "cpio -D \"$PROJECT/safe /../../etc\" -i"
+
+# dd of=
+expect_blocked 'dd of= quoted space traversal' \
+  "dd if=/dev/zero of=\"$PROJECT/safe /../../etc/passwd\""
+
+expect_allowed 'dd of= quoted space inside project' \
+  "dd if=/dev/zero of=\"$PROJECT/dir with space/file.bin\""
+
+# mv/cp --target-directory / -t
+expect_blocked 'mv --target-directory= quoted space traversal' \
+  "mv --target-directory=\"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_blocked 'cp --target-directory= quoted space traversal' \
+  "cp --target-directory=\"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_blocked 'mv -t quoted space traversal' \
+  "mv -t \"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_blocked 'cp -t quoted space traversal' \
+  "cp -t \"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_allowed 'mv -t quoted space inside project' \
+  "mv -t \"$PROJECT/dir with space\" a.txt"
+
+# Redirect > / >>
+expect_blocked 'redirect > quoted space traversal' \
+  "echo x > \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect >> quoted space traversal' \
+  "echo x >> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_allowed 'redirect > quoted space inside project' \
+  "echo x > \"$PROJECT/dir with space/out.txt\""
+
+echo ""
+
+# ============================================================
 # 46. cwd from hook event payload
 # ============================================================
 echo "--- cwd from hook event ---"

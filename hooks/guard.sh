@@ -148,6 +148,38 @@ tokenize_args() {
   done
 }
 
+# --- Extract an option value from CMD_TOKENS ---
+# Usage: extract_option_value <short> <long>
+#   short: e.g. "-o", or "" to skip
+#   long:  e.g. "--output", or "" to skip
+# Supports: "-o value", "--output value", "--output=value"
+# Echoes the value (quotes preserved — caller must expand_path).
+# Returns 0 if found, 1 otherwise.
+extract_option_value() {
+  local short="$1"
+  local long="$2"
+  local i=0 n=${#CMD_TOKENS[@]}
+  while [ $i -lt $n ]; do
+    local tok="${CMD_TOKENS[$i]}"
+    if [ -n "$short" ] && [ "$tok" = "$short" ] && [ $((i + 1)) -lt $n ]; then
+      echo "${CMD_TOKENS[$((i + 1))]}"
+      return 0
+    fi
+    if [ -n "$long" ]; then
+      if [ "$tok" = "$long" ] && [ $((i + 1)) -lt $n ]; then
+        echo "${CMD_TOKENS[$((i + 1))]}"
+        return 0
+      fi
+      if [[ "$tok" == "${long}="* ]]; then
+        echo "${tok#${long}=}"
+        return 0
+      fi
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # --- Check if a resolved path is inside the project directory ---
 is_inside_project() {
   local resolved="$1"
@@ -211,6 +243,13 @@ check_single_command() {
     CMD="${CMD#sudo }"
     CMD="$(echo "$CMD" | sed 's/^[[:space:]]*//')"
   fi
+
+  # --- Tokenize the command once (quote-aware) for option/redirect parsing ---
+  local -a CMD_TOKENS=()
+  while IFS= read -r tok; do
+    [[ -z "$tok" ]] && continue
+    CMD_TOKENS+=("$tok")
+  done < <(tokenize_args "$CMD")
 
   # --- Block cd outside project followed by destructive commands ---
   if [[ "$CMD" =~ ^cd($|[[:space:]]) ]]; then
@@ -432,9 +471,9 @@ check_single_command() {
 
   # --- Moving files outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])mv($|[[:space:]])'; then
-    # Check --target-directory=PATH
+    # Check -t / --target-directory
     local mv_target_dir
-    mv_target_dir=$(echo "$CMD" | grep -oE '\-\-target-directory=[^ ]+' | sed 's/--target-directory=//' || true)
+    mv_target_dir=$(extract_option_value "-t" "--target-directory" || true)
     if [ -n "$mv_target_dir" ]; then
       mv_target_dir=$(expand_path "$mv_target_dir")
       [[ "$mv_target_dir" != /* ]] && mv_target_dir="$EFFECTIVE_CWD/$mv_target_dir"
@@ -465,9 +504,9 @@ check_single_command() {
 
   # --- cp command: check all non-flag arguments ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])cp($|[[:space:]])'; then
-    # Check --target-directory=PATH
+    # Check -t / --target-directory
     local cp_target_dir
-    cp_target_dir=$(echo "$CMD" | grep -oE '\-\-target-directory=[^ ]+' | sed 's/--target-directory=//' || true)
+    cp_target_dir=$(extract_option_value "-t" "--target-directory" || true)
     if [ -n "$cp_target_dir" ]; then
       cp_target_dir=$(expand_path "$cp_target_dir")
       [[ "$cp_target_dir" != /* ]] && cp_target_dir="$EFFECTIVE_CWD/$cp_target_dir"
@@ -563,12 +602,8 @@ check_single_command() {
 
   # --- tar: check -C / --directory=PATH for extraction ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])tar($|[[:space:]])'; then
-    # -C PATH (separated)
-    tar_dir=$(echo "$CMD" | grep -oE '(^|[[:space:]])-C[[:space:]]+[^ ]+' | sed -E 's/.*-C[[:space:]]+//' || true)
-    if [ -z "$tar_dir" ]; then
-      # --directory=PATH
-      tar_dir=$(echo "$CMD" | grep -oE '\-\-directory=[^ ]+' | sed 's/--directory=//' || true)
-    fi
+    local tar_dir
+    tar_dir=$(extract_option_value "-C" "--directory" || true)
     if [ -n "$tar_dir" ]; then
       tar_dir=$(expand_path "$tar_dir")
       if [[ "$tar_dir" != /* ]]; then
@@ -583,9 +618,10 @@ check_single_command() {
     fi
   fi
 
-  # --- unzip -d PATH / cpio -D PATH ---
+  # --- unzip -d PATH ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])unzip($|[[:space:]])'; then
-    unzip_dir=$(echo "$CMD" | grep -oE '(^|[[:space:]])-d[[:space:]]+[^ ]+' | sed -E 's/.*-d[[:space:]]+//' || true)
+    local unzip_dir
+    unzip_dir=$(extract_option_value "-d" "" || true)
     if [ -n "$unzip_dir" ]; then
       unzip_dir=$(expand_path "$unzip_dir")
       if [[ "$unzip_dir" != /* ]]; then
@@ -600,8 +636,10 @@ check_single_command() {
     fi
   fi
 
+  # --- cpio -D PATH ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])cpio($|[[:space:]])'; then
-    cpio_dir=$(echo "$CMD" | grep -oE '(^|[[:space:]])-D[[:space:]]+[^ ]+' | sed -E 's/.*-D[[:space:]]+//' || true)
+    local cpio_dir
+    cpio_dir=$(extract_option_value "-D" "" || true)
     if [ -n "$cpio_dir" ]; then
       cpio_dir=$(expand_path "$cpio_dir")
       if [[ "$cpio_dir" != /* ]]; then
@@ -639,14 +677,7 @@ check_single_command() {
   # --- curl -o / curl --output outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])curl($|[[:space:]])'; then
     local curl_output=""
-    # Match -o <file> or --output <file> or --output=<file>
-    if echo "$CMD" | grep -qE '(^|[[:space:]])-o[[:space:]]'; then
-      curl_output=$(echo "$CMD" | sed -E 's/.*[[:space:]]-o[[:space:]]+([^ ]+).*/\1/')
-    elif echo "$CMD" | grep -qE '(^|[[:space:]])--output[[:space:]]'; then
-      curl_output=$(echo "$CMD" | sed -E 's/.*--output[[:space:]]+([^ ]+).*/\1/')
-    elif echo "$CMD" | grep -qE '(^|[[:space:]])--output='; then
-      curl_output=$(echo "$CMD" | sed -E 's/.*--output=([^ ]+).*/\1/')
-    fi
+    curl_output=$(extract_option_value "-o" "--output" || true)
     if [ -n "$curl_output" ]; then
       curl_output=$(expand_path "$curl_output")
       if [[ "$curl_output" != /* ]]; then
@@ -664,13 +695,7 @@ check_single_command() {
   # --- wget -O / wget --output-document outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])wget($|[[:space:]])'; then
     local wget_output=""
-    if echo "$CMD" | grep -qE '(^|[[:space:]])-O[[:space:]]'; then
-      wget_output=$(echo "$CMD" | sed -E 's/.*[[:space:]]-O[[:space:]]+([^ ]+).*/\1/')
-    elif echo "$CMD" | grep -qE '(^|[[:space:]])--output-document[[:space:]]'; then
-      wget_output=$(echo "$CMD" | sed -E 's/.*--output-document[[:space:]]+([^ ]+).*/\1/')
-    elif echo "$CMD" | grep -qE '(^|[[:space:]])--output-document='; then
-      wget_output=$(echo "$CMD" | sed -E 's/.*--output-document=([^ ]+).*/\1/')
-    fi
+    wget_output=$(extract_option_value "-O" "--output-document" || true)
     if [ -n "$wget_output" ]; then
       wget_output=$(expand_path "$wget_output")
       if [[ "$wget_output" != /* ]]; then
@@ -688,7 +713,13 @@ check_single_command() {
   # --- dd of= outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])dd($|[[:space:]])'; then
     local dd_output=""
-    dd_output=$(echo "$CMD" | grep -oE 'of=[^ ]+' | sed 's/^of=//' || true)
+    # dd uses key=value syntax, not standard long options — walk tokens directly
+    for tok in "${CMD_TOKENS[@]}"; do
+      if [[ "$tok" == of=* ]]; then
+        dd_output="${tok#of=}"
+        break
+      fi
+    done
     if [ -n "$dd_output" ]; then
       dd_output=$(expand_path "$dd_output")
       if [[ "$dd_output" != /* ]]; then
@@ -704,22 +735,46 @@ check_single_command() {
   fi
 
   # --- Writing to files outside project via redirection (> and >>) ---
-  if echo "$CMD" | grep -qE '>{1,2}[[:space:]]*/|>{1,2}[[:space:]]*~|>{1,2}[[:space:]]*\$HOME|>{1,2}[[:space:]]*"[/~]|>{1,2}[[:space:]]*'"'"'[/~]|>{1,2}[[:space:]]*\.\.'; then
-    # Extract redirect targets for both > and >>
-    REDIR_TARGET=$(echo "$CMD" | grep -oE '>{1,2}[[:space:]]*[^ ]+' | sed 's/^>*[[:space:]]*//')
+  # Walk tokens to find redirect targets. Handles: > file, >> file, >file, >>file
+  local ri=0 rn=${#CMD_TOKENS[@]}
+  while [ $ri -lt $rn ]; do
+    local rtok="${CMD_TOKENS[$ri]}"
+    local REDIR_TARGET=""
+    case "$rtok" in
+      '>'|'>>')
+        if [ $((ri + 1)) -lt $rn ]; then
+          REDIR_TARGET="${CMD_TOKENS[$((ri + 1))]}"
+          ri=$((ri + 2))
+        else
+          ri=$((ri + 1))
+        fi
+        ;;
+      '>>'*)
+        REDIR_TARGET="${rtok#>>}"
+        ri=$((ri + 1))
+        ;;
+      '>'*)
+        REDIR_TARGET="${rtok#>}"
+        ri=$((ri + 1))
+        ;;
+      *)
+        ri=$((ri + 1))
+        continue
+        ;;
+    esac
     if [ -n "$REDIR_TARGET" ]; then
       REDIR_TARGET=$(expand_path "$REDIR_TARGET")
       if [[ "$REDIR_TARGET" != /* ]]; then
         REDIR_TARGET="$EFFECTIVE_CWD/$REDIR_TARGET"
       fi
-      RESOLVED=$(resolve_path "$REDIR_TARGET")
-
-      if ! is_inside_project "$RESOLVED"; then
-        echo "BLOCKED: Redirect target '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+      local resolved_redir
+      resolved_redir=$(resolve_path "$REDIR_TARGET")
+      if ! is_inside_project "$resolved_redir"; then
+        echo "BLOCKED: Redirect target '$resolved_redir' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
     fi
-  fi
+  done
 
   # --- Chmod/chown outside project ---
   for CMD_NAME in chmod chown; do
