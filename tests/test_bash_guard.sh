@@ -880,6 +880,251 @@ expect_allowed "rsync inside project" \
 echo ""
 
 # ============================================================
+# 45d. Option extractors with quoted space + traversal (#6)
+# ============================================================
+echo "--- Option extractors: quoted space + traversal ---"
+
+# Set up a subdir inside project so prefix matches before traversal
+mkdir -p "$PROJECT/safe"
+mkdir -p "$PROJECT/dir with space"
+
+# curl -o / --output / --output=
+expect_blocked 'curl -o quoted space traversal' \
+  "curl -o \"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_blocked 'curl --output quoted space traversal' \
+  "curl --output \"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_blocked 'curl --output= quoted space traversal' \
+  "curl --output=\"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_allowed 'curl -o quoted space inside project' \
+  "curl -o \"$PROJECT/dir with space/out.txt\" http://x"
+
+# wget -O / --output-document / --output-document=
+expect_blocked 'wget -O quoted space traversal' \
+  "wget -O \"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_blocked 'wget --output-document= quoted space traversal' \
+  "wget --output-document=\"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_blocked 'wget --output-document quoted space traversal (separated)' \
+  "wget --output-document \"$PROJECT/safe /../../etc/passwd\" http://x"
+
+expect_allowed 'wget -O quoted space inside project' \
+  "wget -O \"$PROJECT/dir with space/out.txt\" http://x"
+
+# tar -C / --directory / --directory=
+expect_blocked 'tar -C quoted space traversal' \
+  "tar -C \"$PROJECT/safe /../../etc\" -xf a.tar"
+
+expect_blocked 'tar --directory= quoted space traversal' \
+  "tar --directory=\"$PROJECT/safe /../../etc\" -xf a.tar"
+
+expect_allowed 'tar -C quoted space inside project' \
+  "tar -C \"$PROJECT/dir with space\" -xf a.tar"
+
+# unzip -d
+expect_blocked 'unzip -d quoted space traversal' \
+  "unzip -d \"$PROJECT/safe /../../etc\" a.zip"
+
+expect_allowed 'unzip -d quoted space inside project' \
+  "unzip -d \"$PROJECT/dir with space\" a.zip"
+
+# cpio -D
+expect_blocked 'cpio -D quoted space traversal' \
+  "cpio -D \"$PROJECT/safe /../../etc\" -i"
+
+# dd of=
+expect_blocked 'dd of= quoted space traversal' \
+  "dd if=/dev/zero of=\"$PROJECT/safe /../../etc/passwd\""
+
+expect_allowed 'dd of= quoted space inside project' \
+  "dd if=/dev/zero of=\"$PROJECT/dir with space/file.bin\""
+
+# mv/cp --target-directory / -t
+expect_blocked 'mv --target-directory= quoted space traversal' \
+  "mv --target-directory=\"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_blocked 'mv --target-directory quoted space traversal (separated)' \
+  "mv --target-directory \"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_blocked 'cp --target-directory= quoted space traversal' \
+  "cp --target-directory=\"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_blocked 'cp --target-directory quoted space traversal (separated)' \
+  "cp --target-directory \"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_blocked 'mv -t quoted space traversal' \
+  "mv -t \"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_blocked 'cp -t quoted space traversal' \
+  "cp -t \"$PROJECT/safe /../../tmp\" a.txt"
+
+expect_allowed 'mv -t quoted space inside project' \
+  "mv -t \"$PROJECT/dir with space\" a.txt"
+
+# Redirect > / >>
+expect_blocked 'redirect > quoted space traversal' \
+  "echo x > \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect >> quoted space traversal' \
+  "echo x >> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_allowed 'redirect > quoted space inside project' \
+  "echo x > \"$PROJECT/dir with space/out.txt\""
+
+# fd-prefixed redirects: 1>, 2>, 2>>, &>, &>>
+expect_blocked 'redirect 1> quoted space traversal' \
+  "echo x 1> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect 2> quoted space traversal' \
+  "echo x 2> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect 2>> quoted space traversal' \
+  "echo x 2>> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect &> quoted space traversal' \
+  "echo x &> \"$PROJECT/safe /../../etc/passwd\""
+
+expect_blocked 'redirect 2>file attached form outside project' \
+  "echo x 2>/etc/passwd"
+
+expect_allowed 'redirect 2> inside project' \
+  "echo x 2> \"$PROJECT/dir with space/err.txt\""
+
+expect_allowed 'redirect &> inside project' \
+  "echo x &> \"$PROJECT/dir with space/all.txt\""
+
+# fd-to-fd redirect must not be treated as a file target
+expect_allowed 'redirect 2>&1 (fd-to-fd, not a file)' \
+  "echo x 2>&1"
+
+# Repeated options: last one wins — must validate all occurrences
+expect_blocked 'tar repeated -C last wins to outside' \
+  "tar -C \"$PROJECT\" -C /etc -xf archive.tar"
+
+expect_blocked 'tar repeated -C first inside, second outside' \
+  "tar -C \"$PROJECT/dir with space\" -C /tmp -xf archive.tar"
+
+expect_allowed 'tar repeated -C both inside project' \
+  "tar -C \"$PROJECT\" -C \"$PROJECT/dir with space\" -xf archive.tar"
+
+expect_blocked 'dd repeated of= last wins to outside' \
+  "dd if=/dev/zero of=\"$PROJECT/ok\" of=/etc/passwd"
+
+expect_blocked 'dd repeated of= first inside, second outside' \
+  "dd if=/dev/zero of=\"$PROJECT/dir with space/ok\" of=/etc/passwd"
+
+# Repeated -o/-O/-t options with last-wins bypass: extract_option_value
+# must return the LAST match so the effective value is validated.
+expect_blocked 'curl repeated -o last wins to outside' \
+  "curl -o \"$PROJECT/ok.txt\" -o /etc/passwd http://x"
+
+expect_blocked 'curl repeated --output last wins to outside' \
+  "curl --output \"$PROJECT/ok.txt\" --output /etc/passwd http://x"
+
+expect_blocked 'wget repeated -O last wins to outside' \
+  "wget -O \"$PROJECT/ok.txt\" -O /etc/passwd http://x"
+
+expect_blocked 'wget repeated --output-document last wins to outside' \
+  "wget --output-document \"$PROJECT/ok.txt\" --output-document /etc/passwd http://x"
+
+expect_blocked 'mv repeated -t last wins to outside' \
+  "mv -t \"$PROJECT\" -t /etc a.txt"
+
+expect_blocked 'cp repeated --target-directory last wins to outside' \
+  "cp --target-directory \"$PROJECT\" --target-directory /etc a.txt"
+
+# Attached-form redirects (no whitespace before >)
+expect_blocked 'redirect x>file no whitespace traversal' \
+  "echo x>/etc/passwd"
+
+expect_blocked 'redirect x>>file no whitespace traversal' \
+  "echo x>>/etc/passwd"
+
+expect_blocked 'redirect "x">file quoted no whitespace' \
+  'echo "x">/etc/passwd'
+
+expect_blocked 'redirect x>file attached to token with quoted space path' \
+  "echo x>\"$PROJECT/safe /../../etc/passwd\""
+
+expect_allowed 'redirect x>file no whitespace inside project' \
+  "echo x>\"$PROJECT/dir with space/out.txt\""
+
+# Quoted option flags: tokenize_args preserves quotes, so flag matching
+# must strip them first. Otherwise curl "-o" /etc/passwd bypasses.
+expect_blocked 'curl with quoted -o flag' \
+  'curl "-o" /etc/passwd http://x'
+
+expect_blocked 'curl with quoted --output flag' \
+  'curl "--output" /etc/passwd http://x'
+
+expect_blocked 'curl with quoted --output=value' \
+  'curl "--output=/etc/passwd" http://x'
+
+expect_blocked 'wget with quoted -O flag' \
+  'wget "-O" /etc/passwd http://x'
+
+expect_blocked 'tar with quoted -C flag' \
+  'tar "-C" /etc -xf a.tar'
+
+expect_blocked 'tar with quoted --directory= value' \
+  'tar "--directory=/etc" -xf a.tar'
+
+expect_blocked 'dd with quoted of= token' \
+  'dd if=/dev/zero "of=/etc/passwd"'
+
+expect_blocked 'mv with quoted -t flag' \
+  'mv "-t" /etc a.txt'
+
+expect_blocked 'cp with quoted --target-directory= value' \
+  'cp "--target-directory=/etc" a.txt'
+
+# Bash clobber operator >| / >>| — | is part of the operator, not a pipe
+expect_blocked 'clobber >| to outside project' \
+  'echo x >| /etc/passwd'
+
+expect_blocked 'clobber >|file attached to outside' \
+  'echo x >|/etc/passwd'
+
+expect_blocked 'clobber >>| append to outside' \
+  'echo x >>| /etc/passwd'
+
+expect_allowed 'clobber >| inside project' \
+  "echo x >| \"$PROJECT/dir with space/out.txt\""
+
+# Process substitution > >(cmd) — uninspectable, must block
+expect_blocked 'process substitution > >(tee outside)' \
+  'echo x > >(tee /etc/passwd)'
+
+expect_blocked 'process substitution attached >(cmd)' \
+  'echo x >>(tee /etc/passwd)'
+
+# Positional curl -o: validate EVERY occurrence, not just last
+expect_blocked 'curl positional -o first outside second inside' \
+  "curl -o /etc/passwd http://a -o \"$PROJECT/out\" http://b"
+
+expect_blocked 'curl positional -o first inside second outside' \
+  "curl -o \"$PROJECT/out\" http://a -o /etc/passwd http://b"
+
+expect_allowed 'curl positional -o both inside project' \
+  "curl -o \"$PROJECT/a\" http://a -o \"$PROJECT/b\" http://b"
+
+# Positional wget -O (same semantics concern)
+expect_blocked 'wget positional -O first outside second inside' \
+  "wget -O /etc/passwd http://a -O \"$PROJECT/out\" http://b"
+
+# Backslash-escaped > is a literal, not a redirect
+expect_allowed 'backslash-escaped > not a redirect' \
+  'echo \>/etc/passwd'
+
+expect_allowed 'backslash-escaped >> not a redirect' \
+  'echo \>\>/etc/passwd'
+
+echo ""
+
+# ============================================================
 # 46. cwd from hook event payload
 # ============================================================
 echo "--- cwd from hook event ---"
