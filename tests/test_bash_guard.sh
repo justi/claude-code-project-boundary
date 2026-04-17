@@ -1293,3 +1293,38 @@ expect_allowed "rake db:reset (inside project)" \
   "rake db:reset"
 
 echo ""
+
+# ============================================================
+# 48. Tokens that look like echo flags (printf vs echo safety)
+# ============================================================
+echo "--- Tokens resembling echo flags ---"
+
+expect_blocked "rm with -n flag-like filename outside project" \
+  "rm /etc/-n"
+
+expect_blocked "mv -n flag-like path outside project" \
+  "mv -n /etc/passwd $PROJECT/file"
+
+expect_allowed "rm -n flag-like filename inside project" \
+  "rm $PROJECT/-n"
+
+echo ""
+
+# ============================================================
+# 49. Pipe to shell with flags (sed ERE portability)
+# ============================================================
+echo "--- Pipe to shell with flags (ERE portability) ---"
+
+expect_blocked "pipe to bash -i" \
+  'echo "cmd" | bash -i'
+
+expect_blocked "pipe to sh -s" \
+  'echo "cmd" | sh -s'
+
+expect_blocked "pipe to /bin/bash --login" \
+  'echo "cmd" | /bin/bash --login'
+
+expect_blocked "pipe to bash -l" \
+  'echo "cmd" | bash -l'
+
+echo ""
