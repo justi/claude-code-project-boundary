@@ -227,3 +227,47 @@ rm -rf "$HOME/.claude"
 export HOME="$_BYP_HOME_SAVE"
 
 echo ""
+
+# ============================================================
+# 9. Positional / special parameters bypass $VAR fail-closed check
+# ------------------------------------------------------------
+# The $VAR fail-closed scan only fires when $ is followed by [A-Za-z_]
+# (regular name) or `{` (braced form). It misses every other shell
+# parameter that expands at exec time:
+#   $1..$9, ${1}, ${23}  — positional parameters set by `set --` / function args
+#   $@, $*, ${@}, ${*}   — all positional args
+#   $#                    — arg count (not a path, but still exec-time expansion)
+#   $?, $$, $!, $-, $0    — special parameters
+# Concretely: `set -- /etc/passwd_test; rm $1` is accepted because the
+# guard sees the literal `$1` as a relative path (joined under cwd and
+# judged "inside project"), while bash expands it to the outside path
+# at execution time. Same class of bug as $FOO — must fail closed
+# unless explicitly allowlisted (currently only $HOME).
+# ============================================================
+echo "--- 9. positional / special parameter expansion ---"
+
+expect_blocked "set -- /etc/... ; rm \$1 (positional)" \
+  'set -- /etc/passwd_test; rm $1'
+
+expect_blocked "rm \${1} (braced positional)" \
+  'rm ${1}'
+
+expect_blocked "rm \${10} (multi-digit positional)" \
+  'rm ${10}'
+
+expect_blocked "rm \$@ (all positional)" \
+  'rm $@'
+
+expect_blocked "rm \$* (all positional, IFS-joined)" \
+  'rm $*'
+
+expect_blocked "rm \${@} (braced all-positional)" \
+  'rm ${@}'
+
+expect_blocked "echo > \$0 (script name)" \
+  'echo x > $0'
+
+expect_blocked "rm \$- (shell flags)" \
+  'rm $-'
+
+echo ""
