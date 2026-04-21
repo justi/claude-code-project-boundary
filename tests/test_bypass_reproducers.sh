@@ -26,14 +26,14 @@ echo ""
 # ============================================================
 echo "--- 1. subshell-without-space prefix ---"
 
-expect_blocked "subshell rm: (rm /etc/passwd)" \
+expect_blocked "subshell rm: (rm /etc/passwd_test)" \
   "(rm /etc/passwd_test)"
 
-expect_blocked "subshell mv: (mv project /etc/x)" \
-  "(mv $PROJECT/a /etc/x)"
+expect_blocked "subshell mv: (mv PROJECT/a /etc/passwd_test)" \
+  "(mv $PROJECT/a /etc/passwd_test)"
 
-expect_blocked "subshell curl -o outside: (curl -o /etc/x http://x)" \
-  "(curl -o /etc/x http://example.com)"
+expect_blocked "subshell curl -o outside: (curl -o /etc/passwd_test http://x)" \
+  "(curl -o /etc/passwd_test http://example.com)"
 
 echo ""
 
@@ -146,9 +146,22 @@ echo ""
 # ============================================================
 echo "--- 7. redirect through inside-project symlink ---"
 
-ln -sf /tmp/owned "$PROJECT/evil_link" 2>/dev/null || true
-expect_blocked "redirect > project/link -> /tmp/owned" \
-  "echo pwned > $PROJECT/evil_link"
+# Setup: a symlink inside the project pointing outside. If this setup fails
+# (e.g., filesystem without symlink support), the reproducer no longer
+# exercises the intended bypass — so the setup itself is asserted as a test
+# and the reproducer only runs when the prerequisite holds.
+ln -sf /tmp/owned "$PROJECT/evil_link" 2>/dev/null
+TOTAL=$((TOTAL + 1))
+if [[ -L "$PROJECT/evil_link" ]]; then
+  echo "PASS: setup: inside-project symlink created for redirect test"
+  PASS=$((PASS + 1))
+  expect_blocked "redirect > project/link -> /tmp/owned" \
+    "echo pwned > $PROJECT/evil_link"
+else
+  echo "FAIL: setup: could not create inside-project symlink at $PROJECT/evil_link"
+  FAIL=$((FAIL + 1))
+  echo "SKIP: redirect > project/link -> /tmp/owned (prerequisite symlink missing)"
+fi
 rm -f "$PROJECT/evil_link"
 
 echo ""
