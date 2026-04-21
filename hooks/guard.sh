@@ -45,13 +45,15 @@ resolve_path() {
   if [[ "$p" != /* ]]; then
     p="$(pwd)/$p"
   fi
-  # Normalize: resolve . and .. segments
+  # Normalize: collapse `.` and `//` segments only. DO NOT lexically resolve
+  # `..`, because that would skip over a symlinked intermediate directory
+  # (e.g. `memory/linkdir/../x` with `linkdir -> /tmp` is `/tmp/x` at the
+  # OS level, not `memory/x`). `..` is left for physical resolution via
+  # `cd $check && pwd -P` below, which honors symlink semantics correctly.
   local -a parts=()
   local IFS='/'
   for segment in $p; do
-    if [[ "$segment" == ".." ]]; then
-      [[ ${#parts[@]} -gt 0 ]] && unset 'parts[${#parts[@]}-1]'
-    elif [[ "$segment" != "." && -n "$segment" ]]; then
+    if [[ "$segment" != "." && -n "$segment" ]]; then
       parts+=("$segment")
     fi
   done
@@ -69,23 +71,174 @@ resolve_path() {
     tail="/$(basename "$check")$tail"
     check="$(dirname "$check")"
   done
+  local combined
   if [[ -d "$check" ]]; then
+    # `check` is a directory (possibly via symlink) — canonicalize it.
+    # `cd && pwd -P` follows symlinks fully, so `.../linkdir -> /etc`
+    # resolves to `/etc`. This is essential: if left unresolved, the
+    # subsequent lexical `..` pass would incorrectly pop `linkdir` and
+    # leave the caller inside the allowlisted dir.
     local real_ancestor
-    real_ancestor=$(cd "$check" && pwd -P)
-    echo "${real_ancestor}${tail}"
+    real_ancestor=$(cd -P "$check" && pwd -P)
+    combined="${real_ancestor}${tail}"
+  elif [[ -e "$check" ]]; then
+    # File exists — canonicalize the directory component so that intermediate
+    # symlinks are fully dereferenced (macOS /var -> /private/var is one
+    # case; more importantly, a user-created symlink inside an allowlisted
+    # dir like `memory/linkdir -> /etc` resolves here, otherwise the
+    # allowlist matches the unresolved path and permits the write).
+    local _f_dir _f_base
+    _f_dir=$(dirname "$check")
+    _f_base=$(basename "$check")
+    if [[ -d "$_f_dir" ]]; then
+      local _real_f_dir
+      _real_f_dir=$(cd -P "$_f_dir" && pwd -P)
+      combined="${_real_f_dir}/${_f_base}${tail}"
+    else
+      combined="$normalized"
+    fi
   else
-    echo "$normalized"
+    combined="$normalized"
+  fi
+  # Final pass: apply lexical `..` resolution on the combined result.
+  # This is SAFE here (unlike at the top of the function) because the
+  # ancestor has been physically canonicalized — no symlinks remain in
+  # the prefix, so `..` cannot silently cross one. This step collapses
+  # path-traversal attempts like `$PROJECT/safe/../../etc/passwd` into
+  # `/etc/passwd` for the boundary check.
+  local -a _final=()
+  local IFS='/'
+  for _seg in $combined; do
+    if [[ "$_seg" == ".." ]]; then
+      [[ ${#_final[@]} -gt 0 ]] && unset '_final[${#_final[@]}-1]'
+    elif [[ -n "$_seg" ]]; then
+      _final+=("$_seg")
+    fi
+  done
+  if [[ ${#_final[@]} -eq 0 ]]; then
+    echo "/"
+  else
+    echo "/${_final[*]}"
   fi
 }
 
 # Resolve PROJECT_DIR itself so symlinks (e.g. /var -> /private/var on macOS) match
 PROJECT_DIR=$(resolve_path "$PROJECT_DIR")
 
+# --- Load path allowlist from hooks/allowlist.conf ---
+# Patterns listed there bypass the boundary check. Kept in a separate file
+# so users can inspect/extend without editing the guard logic. See the
+# warning at the top of allowlist.conf — broad entries create bypass risk.
+declare -a ALLOWLIST_PATTERNS=()
+ALLOWLIST_FILE="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/hooks/allowlist.conf"
+# Resolve HOME so `~` in patterns matches the canonical form that
+# resolve_path produces for checked paths (handles macOS /var ->
+# /private/var symlink so `~/.claude/**` compares correctly).
+_ALLOWLIST_HOME=$(resolve_path "$HOME")
+if [ -f "$ALLOWLIST_FILE" ]; then
+  while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+    line="${raw_line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    # Expand leading ~ to the resolved $HOME
+    if [[ "$line" == "~/"* ]]; then
+      line="$_ALLOWLIST_HOME/${line#\~/}"
+    elif [[ "$line" == "~" ]]; then
+      line="$_ALLOWLIST_HOME"
+    fi
+    ALLOWLIST_PATTERNS+=("$line")
+  done < "$ALLOWLIST_FILE"
+fi
+
+# --- Convert a glob pattern to an anchored regex ---
+# We can't rely on bash `[[ == ]]` + globstar because in that form `*`
+# matches `/` too (so `projects/*/memory` would also match
+# `projects/a/b/memory`). Custom translator enforces path-segment semantics:
+#   `**` matches any characters including `/`
+#   `*`  matches any characters EXCEPT `/`
+#   `?`  matches a single character except `/`
+#   other regex metachars are escaped to literals
+glob_to_regex() {
+  local g="$1"
+  local out=""
+  local i=0 n=${#g}
+  while [ $i -lt $n ]; do
+    local c="${g:$i:1}"
+    if [ "$c" = "*" ] && [ $((i + 1)) -lt $n ] && [ "${g:$((i + 1)):1}" = "*" ]; then
+      out="${out}.*"
+      i=$((i + 2))
+    elif [ "$c" = "*" ]; then
+      out="${out}[^/]*"
+      i=$((i + 1))
+    elif [ "$c" = "?" ]; then
+      out="${out}[^/]"
+      i=$((i + 1))
+    else
+      case "$c" in
+        .|+|\(|\)|\{|\}|\||\^|\$|\\|\[|\])
+          out="${out}\\${c}" ;;
+        *)
+          out="${out}${c}" ;;
+      esac
+      i=$((i + 1))
+    fi
+  done
+  printf '^%s$' "$out"
+}
+
+# --- Check whether a resolved path is on the allowlist ---
+# Fails closed: empty allowlist means nothing is exempt.
+# A pattern ending in `/**` also matches the directory itself (gitignore-like
+# semantics: `memory/**` allows both `memory` and its contents).
+# --- Detect shell/source tokens by basename (handles any absolute path) ---
+# `/opt/homebrew/bin/bash`, `/nix/store/.../bin/bash`, `/bin/bash` all
+# count as the shell `bash`. Without basename matching, the exec guard
+# only fires for paths in the hard-coded normalization list.
+is_shell_token() {
+  local _t="$1"
+  local _base="${_t##*/}"
+  case "$_base" in
+    bash|sh|zsh|ksh|dash|fish) return 0 ;;
+  esac
+  return 1
+}
+is_source_token() {
+  case "$1" in
+    source|.) return 0 ;;
+  esac
+  return 1
+}
+
+is_allowlisted() {
+  local path="$1"
+  local pattern regex
+  for pattern in "${ALLOWLIST_PATTERNS[@]}"; do
+    regex=$(glob_to_regex "$pattern")
+    if [[ "$path" =~ $regex ]]; then
+      return 0
+    fi
+    if [[ "$pattern" == *"/**" ]]; then
+      local _base="${pattern%/**}"
+      local _base_regex
+      _base_regex=$(glob_to_regex "$_base")
+      if [[ "$path" =~ $_base_regex ]]; then
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
 # Check if the effective working directory is outside the project
 EFFECTIVE_CWD_RESOLVED=$(resolve_path "$EFFECTIVE_CWD")
 CWD_OUTSIDE_PROJECT=0
+CWD_IN_ALLOWLIST=0
 if [[ "$EFFECTIVE_CWD_RESOLVED/" != "$PROJECT_DIR/"* ]]; then
   CWD_OUTSIDE_PROJECT=1
+  if is_allowlisted "$EFFECTIVE_CWD_RESOLVED"; then
+    CWD_IN_ALLOWLIST=1
+  fi
 fi
 
 # --- Strip one layer of surrounding quotes (single or double) ---
@@ -204,11 +357,61 @@ extract_option_values() {
 }
 
 # --- Check if a resolved path is inside the project directory ---
+# STRICT: allowlist does NOT apply here. Use in destructive contexts where
+# the allowlist must not grant an exception: rm, chmod/chown, cd-outside,
+# find -delete/-exec rm, and executing a script file.
 is_inside_project() {
   local resolved="$1"
   # Add trailing slash to both sides so /tmp/project-other doesn't match /tmp/project
   if [[ "$resolved/" == "$PROJECT_DIR/"* ]]; then
     return 0
+  fi
+  return 1
+}
+
+# --- Check if a resolved path is a permitted WRITE target ---
+# Permitted = inside the project OR matches a write-allowlist pattern
+# (hooks/allowlist.conf). Use in write contexts: Edit/Write, redirect,
+# tee, cp/mv/ln/install/rsync targets, tar -C, unzip -d, cpio -D,
+# curl -o, wget -O, dd of=, sed -i, truncate.
+#
+# NOT for destructive ops (rm, chmod/chown, find -delete, cd+destructive,
+# script execution). The allowlist is a WRITE exception, not a general
+# boundary exception.
+is_write_permitted() {
+  local resolved="$1"
+  if is_inside_project "$resolved"; then
+    return 0
+  fi
+  if is_allowlisted "$resolved"; then
+    # Defense-in-depth: if the allowlisted path is (or contains) a symlink,
+    # follow it and require the ultimate target to also be permitted.
+    # Otherwise the allowlist becomes a symlink-pivot bypass:
+    #   ln -sf /etc/passwd memory/link && tee memory/link
+    # would write to /etc/passwd because `memory/link` matches the pattern.
+    local deref="$resolved"
+    local depth=20
+    while [[ -L "$deref" && $depth -gt 0 ]]; do
+      local link_target
+      link_target=$(readlink "$deref")
+      if [[ "$link_target" == /* ]]; then
+        deref=$(resolve_path "$link_target")
+      else
+        deref=$(resolve_path "$(dirname "$deref")/$link_target")
+      fi
+      depth=$((depth - 1))
+    done
+    # Fail-closed on circular / too-deep symlink chains.
+    if [[ -L "$deref" ]]; then
+      return 1
+    fi
+    if is_inside_project "$deref"; then
+      return 0
+    fi
+    if is_allowlisted "$deref"; then
+      return 0
+    fi
+    return 1
   fi
   return 1
 }
@@ -242,7 +445,7 @@ if [ -n "$FILE_PATH" ]; then
   if [[ -e "$RESOLVED" ]]; then
     RESOLVED="$(cd "$(dirname "$RESOLVED")" && pwd -P)/$(basename "$RESOLVED")"
   fi
-  if ! is_inside_project "$RESOLVED"; then
+  if ! is_write_permitted "$RESOLVED"; then
     echo "BLOCKED: File '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
     exit 2
   fi
@@ -398,12 +601,26 @@ check_single_command() {
     local resolved_cd
     resolved_cd=$(resolve_path "$cd_target")
     EFFECTIVE_CWD="$resolved_cd"
+    # STRICT: cd-outside triggers the destructive-subcommand guard.
+    # Allowlist must not weaken this — `cd memory && git clean -fd` should
+    # still block. But write-style commands (`cd memory && tee note.md`)
+    # should reach their per-command is_write_permitted check, so we track
+    # allowlist-context in a separate flag.
     if ! is_inside_project "$resolved_cd"; then
       export _GUARD_CD_OUTSIDE=1
       CWD_OUTSIDE_PROJECT=1
+      if is_allowlisted "$resolved_cd"; then
+        export _GUARD_CD_IN_ALLOWLIST=1
+        CWD_IN_ALLOWLIST=1
+      else
+        export _GUARD_CD_IN_ALLOWLIST=0
+        CWD_IN_ALLOWLIST=0
+      fi
     else
       export _GUARD_CD_OUTSIDE=0
       CWD_OUTSIDE_PROJECT=0
+      export _GUARD_CD_IN_ALLOWLIST=0
+      CWD_IN_ALLOWLIST=0
     fi
     return 0
   fi
@@ -414,9 +631,33 @@ check_single_command() {
   if [[ "${_GUARD_CD_OUTSIDE:-0}" == "1" || "$CWD_OUTSIDE_PROJECT" == "1" ]]; then
     outside_context=1
   fi
+  local cwd_in_allowlist=0
+  if [[ "${_GUARD_CD_IN_ALLOWLIST:-0}" == "1" || "${CWD_IN_ALLOWLIST:-0}" == "1" ]]; then
+    cwd_in_allowlist=1
+  fi
 
   if [[ "$outside_context" == "1" ]]; then
-    local destructive_cmds="rm|mv|cp|ln|chmod|chown|tee|find|curl|wget"
+    # When cwd is in an allowlisted dir, only block TRULY destructive ops
+    # (rm/mv/chmod/chown/find+delete). Write-style commands (tee, curl -o,
+    # wget -O, cp, ln, redirects) must reach their per-command path check
+    # which uses is_write_permitted. Without this split, `cd memory && tee
+    # note.md` would be blocked even though note.md is inside an allowlisted
+    # path. `cp` and `ln` fall into the strict bucket because their own
+    # per-command checks are strict anyway, and bundling them here preserves
+    # earlier behavior.
+    local destructive_cmds
+    if [[ "$cwd_in_allowlist" == "1" ]]; then
+      # In allowlisted cwd, relax only `tee` (per-command check already
+      # validates all non-flag args via is_write_permitted). curl/wget
+      # STAY strict because their validators only cover a subset of
+      # output options (-o/--output and -O/--output-document); the
+      # directory-prefix forms `wget -P` and `curl --output-dir` are
+      # not independently checked, so leaving them open in allowlisted
+      # cwd would allow writes to /etc etc.
+      destructive_cmds="rm|mv|cp|ln|chmod|chown|find|curl|wget"
+    else
+      destructive_cmds="rm|mv|cp|ln|chmod|chown|tee|find|curl|wget"
+    fi
     if echo "$CMD" | grep -qE "(^|[[:space:]])($destructive_cmds)($|[[:space:]])"; then
       echo "BLOCKED: Destructive command outside project directory. Ask user for explicit permission." >&2
       exit 2
@@ -537,6 +778,209 @@ check_single_command() {
     fi
   fi
 
+  # --- Block executing script files outside the project ---
+  # Catches: `bash /tmp/x.sh`, `sh ~/x.sh`, `zsh|ksh|dash|fish /tmp/x.sh`,
+  # `source /tmp/x.sh`, `. /tmp/x.sh`. Inline-code forms (`bash -c ...`)
+  # are caught by the nested-shell block above; this covers the
+  # complementary case where the script is a path argument.
+  #
+  # STRICT project-root check (no allowlist). Allowlist grants WRITE to
+  # specific paths (e.g. memory/); if execute inherited that, a write-
+  # allowlisted dir would become an RCE escape hatch:
+  #   `echo 'rm -rf $HOME' > memory/x.sh && bash memory/x.sh`.
+  # Walk CMD_TOKENS to locate the shell/source invocation, possibly buried
+  # behind an `env [flags] [VAR=val]*` wrapper. Once found, scan for the
+  # script-path operand — honoring flags that consume the next token
+  # (-O / -o for bash set options). Finally, dereference symlinks on the
+  # script path so a `project/link.sh -> /tmp/evil.sh` bait is caught.
+  # Re-tokenize the command with redirect operators (< << <<< <<-) spaced
+  # out so that attached forms like `bash</tmp/x.sh`, `bash<<EOF`, and
+  # `bash<<<'rm -rf /'` don't slip past as single unsplit tokens.
+  local _exec_cmd
+  _exec_cmd=$(printf '%s' "$CMD" | sed -E 's/(<<-|<<<|<<|<)/ \1 /g')
+  local -a CMD_TOKENS_EXEC=()
+  while IFS= read -r _etok; do
+    [[ -z "$_etok" ]] && continue
+    CMD_TOKENS_EXEC+=("$_etok")
+  done < <(tokenize_args "$_exec_cmd")
+
+  local exec_kind="" exec_shell_idx=-1
+  local _ti=0 _tn=${#CMD_TOKENS_EXEC[@]}
+
+  # Fail-closed on ANY stdin redirect (< << <<< <<-) that appears before
+  # a shell/source token — regardless of leading wrappers or VAR=val.
+  # Bash allows redirections to sit anywhere in the command-prefix, so
+  # `FOO=1 < /tmp/evil.sh bash`, `nice < /tmp/evil.sh bash`, and a bare
+  # `< /tmp/evil.sh bash` all feed the shell from an uninspectable source.
+  local _rk=0 _saw_redir=0
+  while [ $_rk -lt $_tn ]; do
+    local _rtok_chk
+    _rtok_chk=$(strip_quotes "${CMD_TOKENS_EXEC[$_rk]}")
+    case "$_rtok_chk" in
+      \<|\<\<|\<\<\<|\<\<-) _saw_redir=1 ;;
+      *)
+        if [ $_saw_redir -eq 1 ] && { is_shell_token "$_rtok_chk" || is_source_token "$_rtok_chk"; }; then
+          echo "BLOCKED: Stdin redirection feeding shell cannot be safely inspected. Ask user for explicit permission." >&2
+          exit 2
+        fi
+        ;;
+    esac
+    _rk=$((_rk + 1))
+  done
+
+  # Fail-closed on `env -S <str>`, `env --split-string=<str>`, `env -C <dir>`,
+  # `env --chdir=<dir>`: all of these either hide the real command inside a
+  # split string or change the cwd so relative script paths no longer match
+  # what Bash actually executes.
+  if [ $_tn -gt 0 ]; then
+    local _env_first
+    _env_first=$(strip_quotes "${CMD_TOKENS_EXEC[0]}")
+    if [[ "$_env_first" == "env" || "$_env_first" == "/usr/bin/env" ]]; then
+      local _envk=1
+      while [ $_envk -lt $_tn ]; do
+        local _envtok
+        _envtok=$(strip_quotes "${CMD_TOKENS_EXEC[$_envk]}")
+        case "$_envtok" in
+          -S|-S*|--split-string|--split-string=*|-C|-C*|--chdir|--chdir=*)
+            echo "BLOCKED: 'env -S/--split-string/-C/--chdir' cannot be safely inspected. Ask user for explicit permission." >&2
+            exit 2 ;;
+        esac
+        _envk=$((_envk + 1))
+      done
+    fi
+  fi
+
+  # Walk past common runtime wrappers (env, command, nice, nohup, timeout,
+  # time, stdbuf, ionice, chrt, taskset) and any leftover sudo flags
+  # (sudo itself is already stripped at the top of check_single_command,
+  # but its own short flags can remain in the token stream as `-E` etc.).
+  # We only advance past token 0 when it is a recognized wrapper or looks
+  # like a flag / VAR=val — this avoids false positives on invocations
+  # like `echo bash`, where `bash` is an argument, not the command.
+  # Categorize the leading token so we know how aggressively to skip.
+  # "env_like" — env / leading flags / leading VAR=val. env has many flag
+  #   and operand forms (-i, -u NAME, FOO=bar), so we skip greedily until
+  #   a shell token appears.
+  # "wrapper" — nice/nohup/timeout/time/command/stdbuf/ionice/chrt/taskset.
+  #   These take at most a few flags + 0–1 positional (e.g. timeout's
+  #   duration). First non-flag non-numeric token is the wrapper's command
+  #   operand — stop there. Avoids false positives like
+  #   `time echo bash /tmp/x` where `bash` is echo's arg, not a shell.
+  # Greedy skip: walk past wrappers / flags / VAR=val / operands until
+  # a shell or source token appears. Known tradeoff — this over-blocks
+  # `time echo bash /tmp/x` (bash is an arg to echo, not a shell), but
+  # precise per-wrapper operand grammars would miss real bypasses like
+  # `timeout -s TERM 10 bash /tmp/x` and `stdbuf -o L bash /tmp/x` where
+  # flag operands are non-numeric. Security over precision for this case.
+  local _advance=0
+  if [ $_tn -gt 0 ]; then
+    local _t0
+    _t0=$(strip_quotes "${CMD_TOKENS_EXEC[0]}")
+    case "$_t0" in
+      env|/usr/bin/env|command|builtin|exec|nice|nohup|timeout|time|stdbuf|ionice|chrt|taskset)
+        _advance=1 ;;
+      -*|+*) _advance=1 ;;
+      *=*) _advance=1 ;;
+    esac
+  fi
+  if [ $_advance -eq 1 ]; then
+    _ti=1
+    while [ $_ti -lt $_tn ]; do
+      local _tok
+      _tok=$(strip_quotes "${CMD_TOKENS_EXEC[$_ti]}")
+      if is_shell_token "$_tok" || is_source_token "$_tok"; then
+        break
+      fi
+      _ti=$((_ti + 1))
+    done
+  fi
+  if [ $_ti -lt $_tn ]; then
+    local _cmd_tok
+    _cmd_tok=$(strip_quotes "${CMD_TOKENS_EXEC[$_ti]}")
+    if is_shell_token "$_cmd_tok"; then
+      exec_kind="shell"; exec_shell_idx=$_ti
+    elif is_source_token "$_cmd_tok"; then
+      exec_kind="source"; exec_shell_idx=$_ti
+    fi
+  fi
+  if [ -n "$exec_kind" ]; then
+    local exec_target=""
+    local ei=$((exec_shell_idx + 1)) en=${#CMD_TOKENS_EXEC[@]}
+    local seen_ddash=0
+    while [ $ei -lt $en ]; do
+      local etok
+      etok=$(strip_quotes "${CMD_TOKENS_EXEC[$ei]}")
+      if [ $seen_ddash -eq 0 ]; then
+        case "$etok" in
+          --) seen_ddash=1; ei=$((ei + 1)); continue ;;
+          # bash/sh -O/+O and -o/+o take the next token as operand
+          -O|+O|-o|+o) ei=$((ei + 2)); continue ;;
+          # Bash accepts both `-x` (enable) and `+x` (disable) forms
+          -*|+*|'') ei=$((ei + 1)); continue ;;
+          # fd prefix for a redirect operator (e.g. `bash 0<file`, `bash 2>&1`).
+          # Skip — the operator itself is handled on the next iteration.
+          [0-9]|[0-9][0-9])
+            ei=$((ei + 1)); continue ;;
+          # Stdin redirection variants: bash executes whatever is piped in.
+          # `<< EOF` / `<<< "str"` content can't be inspected — fail closed.
+          # `< file` — validate `file` as exec target (treat next token as script).
+          \<\<|\<\<-|\<\<\<)
+            echo "BLOCKED: Shell invoked with heredoc/here-string (<<, <<-, <<<) cannot be safely inspected. Ask user for explicit permission." >&2
+            exit 2 ;;
+          \<)
+            ei=$((ei + 1))
+            if [ $ei -lt $en ]; then
+              local _next_tok
+              _next_tok=$(strip_quotes "${CMD_TOKENS_EXEC[$ei]}")
+              # `bash < <(cmd)` — process substitution on stdin is a hidden
+              # command source. Fail closed.
+              case "$_next_tok" in
+                \<|\<\(*|\(*|\&*)
+                  # `< <(cmd)` process substitution, `<(...)` direct, or
+                  # `<&N` fd duplicate — all uninspectable sources.
+                  echo "BLOCKED: Shell stdin from process substitution / fd duplicate cannot be safely inspected. Ask user for explicit permission." >&2
+                  exit 2 ;;
+                *)
+                  exec_target="$_next_tok" ;;
+              esac
+            fi
+            break ;;
+        esac
+      fi
+      exec_target="$etok"
+      break
+    done
+    if [ -n "$exec_target" ]; then
+      exec_target=$(expand_path "$exec_target")
+      if [[ "$exec_target" != /* ]]; then
+        exec_target="$EFFECTIVE_CWD/$exec_target"
+      fi
+      local exec_resolved
+      exec_resolved=$(resolve_path "$exec_target")
+      # Dereference symlinks on the leaf — bash follows them at exec time,
+      # so a project-local symlink pointing outside must be caught.
+      local _exec_depth=20
+      while [[ -L "$exec_resolved" && $_exec_depth -gt 0 ]]; do
+        local _exec_link
+        _exec_link=$(readlink "$exec_resolved")
+        if [[ "$_exec_link" == /* ]]; then
+          exec_resolved=$(resolve_path "$_exec_link")
+        else
+          exec_resolved=$(resolve_path "$(dirname "$exec_resolved")/$_exec_link")
+        fi
+        _exec_depth=$((_exec_depth - 1))
+      done
+      if [[ -L "$exec_resolved" ]]; then
+        echo "BLOCKED: Script symlink chain too deep or circular at '$exec_resolved'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      if [[ "$exec_resolved/" != "$PROJECT_DIR/"* ]]; then
+        echo "BLOCKED: Executing script '$exec_resolved' is OUTSIDE project directory '$PROJECT_DIR'. Allowlist does not cover execute. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    fi
+  fi
+
   # --- xargs with dangerous commands ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])xargs($|[[:space:]])'; then
     # Check if xargs is followed by a dangerous command
@@ -579,6 +1023,7 @@ check_single_command() {
         fi
         local resolved_find
         resolved_find=$(resolve_path "$find_path")
+        # STRICT: find -delete/-exec rm are destructive; allowlist must not apply.
         if ! is_inside_project "$resolved_find"; then
           echo "BLOCKED: 'find' with destructive action targets '$resolved_find' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
           exit 2
@@ -602,6 +1047,7 @@ check_single_command() {
       fi
       RESOLVED=$(resolve_path "$TARGET")
 
+      # STRICT: rm is destructive; allowlist grants WRITE, not DELETE.
       if ! is_inside_project "$RESOLVED"; then
         echo "BLOCKED: 'rm' targets '$RESOLVED' which is OUTSIDE project directory '$PROJECT_DIR'. File deletion is only allowed within the project. Ask user for explicit permission." >&2
         exit 2
@@ -624,6 +1070,9 @@ check_single_command() {
       [[ "$mv_target_dir" != /* ]] && mv_target_dir="$EFFECTIVE_CWD/$mv_target_dir"
       local resolved_mv_td
       resolved_mv_td=$(resolve_path "$mv_target_dir")
+      # STRICT: mv with -t still deletes sources from their original paths.
+      # Allowing an allowlisted dir as dest could pair with an outside-project
+      # source (caught by the per-arg strict loop below) — keep both ends tight.
       if ! is_inside_project "$resolved_mv_td"; then
         echo "BLOCKED: 'mv --target-directory' targets '$resolved_mv_td' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
@@ -640,6 +1089,9 @@ check_single_command() {
       fi
       RESOLVED=$(resolve_path "$TARGET")
 
+      # STRICT: mv deletes the source; allowlist must not apply, otherwise
+      # `mv memory/foo project/foo` would destructively empty the memory dir
+      # (allowlist grants WRITE, not move/delete).
       if ! is_inside_project "$RESOLVED"; then
         echo "BLOCKED: 'mv' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
@@ -774,7 +1226,7 @@ check_single_command() {
         fi
         local resolved_tar
         resolved_tar=$(resolve_path "$tar_dir")
-        if ! is_inside_project "$resolved_tar"; then
+        if ! is_write_permitted "$resolved_tar"; then
           echo "BLOCKED: 'tar -C' targets '$resolved_tar' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
           exit 2
         fi
@@ -792,7 +1244,7 @@ check_single_command() {
       fi
       local resolved_unzip
       resolved_unzip=$(resolve_path "$unzip_dir")
-      if ! is_inside_project "$resolved_unzip"; then
+      if ! is_write_permitted "$resolved_unzip"; then
         echo "BLOCKED: 'unzip -d' targets '$resolved_unzip' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
@@ -809,7 +1261,7 @@ check_single_command() {
       fi
       local resolved_cpio
       resolved_cpio=$(resolve_path "$cpio_dir")
-      if ! is_inside_project "$resolved_cpio"; then
+      if ! is_write_permitted "$resolved_cpio"; then
         echo "BLOCKED: 'cpio -D' targets '$resolved_cpio' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
@@ -829,7 +1281,7 @@ check_single_command() {
       fi
       RESOLVED=$(resolve_path "$TARGET")
 
-      if ! is_inside_project "$RESOLVED"; then
+      if ! is_write_permitted "$RESOLVED"; then
         echo "BLOCKED: 'tee' targets '$RESOLVED' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
@@ -848,7 +1300,7 @@ check_single_command() {
       fi
       local resolved_curl
       resolved_curl=$(resolve_path "$curl_output")
-      if ! is_inside_project "$resolved_curl"; then
+      if ! is_write_permitted "$resolved_curl"; then
         echo "BLOCKED: 'curl' output file '$resolved_curl' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
@@ -865,7 +1317,7 @@ check_single_command() {
       fi
       local resolved_wget
       resolved_wget=$(resolve_path "$wget_output")
-      if ! is_inside_project "$resolved_wget"; then
+      if ! is_write_permitted "$resolved_wget"; then
         echo "BLOCKED: 'wget' output file '$resolved_wget' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
@@ -888,7 +1340,7 @@ check_single_command() {
           fi
           local resolved_dd
           resolved_dd=$(resolve_path "$dd_output")
-          if ! is_inside_project "$resolved_dd"; then
+          if ! is_write_permitted "$resolved_dd"; then
             echo "BLOCKED: 'dd' output '$resolved_dd' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
             exit 2
           fi
@@ -1000,7 +1452,7 @@ check_single_command() {
         echo "BLOCKED: Redirect target symlink chain too deep or circular at '$resolved_redir'. Ask user for explicit permission." >&2
         exit 2
       fi
-      if ! is_inside_project "$resolved_redir"; then
+      if ! is_write_permitted "$resolved_redir"; then
         echo "BLOCKED: Redirect target '$resolved_redir' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
@@ -1048,7 +1500,7 @@ check_single_command() {
         fi
         local sresolved
         sresolved=$(resolve_path "$sexp")
-        if ! is_inside_project "$sresolved"; then
+        if ! is_write_permitted "$sresolved"; then
           echo "BLOCKED: 'sed -i' targets '$sresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
           exit 2
         fi
@@ -1079,7 +1531,7 @@ check_single_command() {
       fi
       local trresolved
       trresolved=$(resolve_path "$trexp")
-      if ! is_inside_project "$trresolved"; then
+      if ! is_write_permitted "$trresolved"; then
         echo "BLOCKED: 'truncate' targets '$trresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
@@ -1108,6 +1560,7 @@ check_single_command() {
         fi
         RESOLVED=$(resolve_path "$TARGET")
 
+        # STRICT: chmod/chown can weaponize permissions; allowlist must not apply.
         if ! is_inside_project "$RESOLVED"; then
           echo "BLOCKED: '${CMD_NAME}' targets '$RESOLVED' which is OUTSIDE project directory. Ask user for explicit permission." >&2
           exit 2
@@ -1123,6 +1576,7 @@ check_single_command() {
 split_and_check() {
   local full_cmd="$1"
   export _GUARD_CD_OUTSIDE=0
+  export _GUARD_CD_IN_ALLOWLIST=0
   local -a subcmds=()
   local current=""
   local in_single_quote=0

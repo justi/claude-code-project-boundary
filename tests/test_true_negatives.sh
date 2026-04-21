@@ -132,3 +132,31 @@ expect_allowed 'dd raw write inside project' \
   "dd if=/dev/urandom of=\"$PROJECT/dir with space/random.bin\" bs=1M count=1"
 
 echo ""
+
+echo "--- executing scripts inside project must still work ---"
+
+expect_allowed 'bash ./tests/test_guard.sh (relative inside project)' \
+  "bash ./tests/test_guard.sh"
+
+expect_allowed 'bash PROJECT/script.sh (absolute inside project)' \
+  "bash $PROJECT/script.sh"
+
+expect_allowed 'sh PROJECT/script.sh' \
+  "sh $PROJECT/script.sh"
+
+expect_allowed 'zsh PROJECT/script.sh' \
+  "zsh $PROJECT/script.sh"
+
+expect_allowed 'bash -x PROJECT/script.sh (with flag)' \
+  "bash -x $PROJECT/script.sh"
+
+# Known limitation: `bash -- PROJECT/script.sh` is false-positively blocked
+# by the older piping-to-shell heuristic (predates this PR). Rare in practice.
+
+expect_allowed 'source PROJECT/venv/bin/activate (relative allowed inside)' \
+  "source $PROJECT/venv/bin/activate"
+
+expect_allowed '. PROJECT/utils.sh' \
+  ". $PROJECT/utils.sh"
+
+echo ""

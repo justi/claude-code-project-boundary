@@ -165,3 +165,65 @@ fi
 rm -f "$PROJECT/evil_link"
 
 echo ""
+
+# ============================================================
+# 8. Executing script files outside the project
+# ------------------------------------------------------------
+# Current guard blocks `bash -c "..."`, `sh -c "..."` and piping to sh/bash,
+# but NOT running a script file whose path is outside the project:
+#   bash /tmp/evil.sh
+#   sh ~/evil.sh
+#   zsh /tmp/evil.sh       (only bash|sh covered by nested-shell rule)
+#   source /tmp/evil.sh    (builtin — loads and runs)
+#   . /tmp/evil.sh         (. is synonym for source)
+#
+# Critical interaction with hooks/allowlist.conf: a write-only allowlist
+# (e.g. memory/) becomes an RCE escape hatch if the same path can then
+# be executed. Execute paths must use a STRICT project-root check that
+# ignores the allowlist.
+# ============================================================
+echo "--- 8. executing external script files ---"
+
+expect_blocked "bash /tmp/evil.sh" \
+  "bash /tmp/evil.sh"
+
+expect_blocked "sh /tmp/evil.sh" \
+  "sh /tmp/evil.sh"
+
+expect_blocked "/bin/bash /tmp/evil.sh" \
+  "/bin/bash /tmp/evil.sh"
+
+expect_blocked "bash ~/evil.sh" \
+  "bash ~/evil.sh"
+
+expect_blocked "zsh /tmp/evil.sh" \
+  "zsh /tmp/evil.sh"
+
+expect_blocked "ksh /tmp/evil.sh" \
+  "ksh /tmp/evil.sh"
+
+expect_blocked "dash /tmp/evil.sh" \
+  "dash /tmp/evil.sh"
+
+expect_blocked "source /tmp/evil.sh" \
+  "source /tmp/evil.sh"
+
+expect_blocked ". /tmp/evil.sh" \
+  ". /tmp/evil.sh"
+
+# Critical: execute path inside an ALLOWLISTED dir must still be blocked.
+# allowlist grants WRITE, execute must NOT inherit that.
+# Hermetic: override HOME so the test never touches real ~/.claude data.
+_BYP_HOME_SAVE="$HOME"
+export HOME="$TMPDIR_BASE/fake_home_bypass"
+mkdir -p "$HOME"
+MEMDIR="$HOME/.claude/projects/-test-slug/memory"
+mkdir -p "$MEMDIR"
+expect_blocked "bash memory/evil.sh (allowlist write-only, execute must block)" \
+  "bash $MEMDIR/evil.sh"
+expect_blocked "source memory/evil.sh (allowlist write-only, execute must block)" \
+  "source $MEMDIR/evil.sh"
+rm -rf "$HOME/.claude"
+export HOME="$_BYP_HOME_SAVE"
+
+echo ""
