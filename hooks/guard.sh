@@ -267,6 +267,62 @@ check_single_command() {
     CMD="$(echo "$CMD" | sed 's/^[[:space:]]*//')"
   fi
 
+  # --- Normalize command-name prefixes for detection regexes ---
+  # All destructive-command detection uses `(^|[[:space:]])<name>($|[[:space:]])`
+  # regexes on the raw CMD string. That pattern misses three trivial aliases:
+  #   (rm …)           — subshell grouping puts `(` before the name
+  #   \rm …            — backslash disables alias lookup but still runs `rm`
+  #   /bin/rm …        — absolute path to the same binary
+  # Normalize these into the bare command form before any detection runs.
+  # This only touches the string used for matching — argument extraction below
+  # operates on the normalized CMD too, so paths are not mangled.
+  # Strip subshell grouping parens only when they sit at a token boundary so
+  # that `$(…)` (command substitution) is NOT mangled — that form is caught
+  # by a dedicated check below. `(rm …)` → `rm …`, `( rm … )` → `rm …`,
+  # `$(foo)` stays as is because the `(` is preceded by `$`, not space/start.
+  CMD="$(printf '%s' "$CMD" | sed -E 's/(^|[[:space:]])\(+/\1/g; s/\)+($|[[:space:]])/\1/g')"
+  # Strip a backslash that precedes a shell-word character (alias escape).
+  CMD="$(printf '%s' "$CMD" | sed -E 's/\\([a-zA-Z_])/\1/g')"
+  # Strip common binary path prefixes so `/bin/rm` → `rm`, `/usr/bin/curl` → `curl`.
+  CMD="$(printf '%s' "$CMD" | sed -E 's#(^|[[:space:]])/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/#\1#g')"
+  # Trim duplicated whitespace introduced by the substitutions.
+  CMD="$(printf '%s' "$CMD" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+
+  # --- Fail closed on unexpanded $VAR outside single quotes ---
+  # `expand_path` only handles ~, $HOME, ${HOME}. Any other $VAR is kept
+  # verbatim and then joined under $EFFECTIVE_CWD, so it looks "inside the
+  # project" to the guard while Bash expands it at exec time. Treat it like
+  # `$(…)`: if the value cannot be inspected, refuse.
+  local vi=0 vlen=${#CMD}
+  local vin_sq=0 vin_dq=0 vin_esc=0
+  while [ $vi -lt $vlen ]; do
+    local vc="${CMD:$vi:1}"
+    if [ $vin_esc -eq 1 ]; then vin_esc=0; vi=$((vi+1)); continue; fi
+    if [ "$vc" = "\\" ] && [ $vin_sq -eq 0 ]; then vin_esc=1; vi=$((vi+1)); continue; fi
+    if [ "$vc" = "'" ] && [ $vin_dq -eq 0 ]; then vin_sq=$((1-vin_sq)); vi=$((vi+1)); continue; fi
+    if [ "$vc" = '"' ] && [ $vin_sq -eq 0 ]; then vin_dq=$((1-vin_dq)); vi=$((vi+1)); continue; fi
+    if [ $vin_sq -eq 0 ] && [ "$vc" = "\$" ] && [ $((vi+1)) -lt $vlen ]; then
+      local vnext="${CMD:$((vi+1)):1}"
+      # Allow $HOME / ${HOME} — expand_path handles them.
+      if [[ "$vnext" =~ [A-Za-z_] ]]; then
+        local rest="${CMD:$((vi+1))}"
+        local vname="${rest%%[^A-Za-z0-9_]*}"
+        if [ "$vname" != "HOME" ]; then
+          echo "BLOCKED: Variable expansion '\$${vname}' cannot be safely inspected. Ask user for explicit permission." >&2
+          exit 2
+        fi
+      elif [ "$vnext" = "{" ]; then
+        local rest="${CMD:$((vi+2))}"
+        local vname="${rest%%\}*}"
+        if [ "$vname" != "HOME" ]; then
+          echo "BLOCKED: Variable expansion '\${${vname}}' cannot be safely inspected. Ask user for explicit permission." >&2
+          exit 2
+        fi
+      fi
+    fi
+    vi=$((vi+1))
+  done
+
   # --- Tokenize the command once (quote-aware) for option/redirect parsing ---
   local -a CMD_TOKENS=()
   while IFS= read -r tok; do
@@ -434,6 +490,24 @@ check_single_command() {
   if echo "$CMD" | grep -qE '(^|[[:space:]])eval[[:space:]]'; then
     echo "BLOCKED: 'eval' cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
+  fi
+
+  # --- Block non-shell interpreters with inline code flags ---
+  # python/perl/ruby/node/php/osascript all accept code on argv. The inner
+  # string cannot be inspected, so the same fail-closed rule as `bash -c`
+  # applies. Flags covered: -c (python), -e (perl/ruby/node), --eval,
+  # --execute, -E (perl alias). A dedicated rule catches `awk 'BEGIN{system(
+  # "…")}'` and similar because awk programs are the first non-option arg,
+  # not behind a flag — so we detect the `system(` marker in the CMD string.
+  if echo "$CMD" | grep -qE '(^|[[:space:]])(python|python2|python3|perl|ruby|node|nodejs|deno|bun|php|osascript|Rscript)[[:space:]]+(-[a-zA-Z]*[ceE]|--eval|--execute)([[:space:]]|=|$)'; then
+    echo "BLOCKED: Non-shell interpreter with inline code flag cannot be safely inspected. Ask user for explicit permission." >&2
+    exit 2
+  fi
+  if echo "$CMD" | grep -qE '(^|[[:space:]])(g?awk|mawk|nawk)([[:space:]]|$)'; then
+    if echo "$CMD" | grep -qE 'system[[:space:]]*\(|\|[[:space:]]*&?[[:space:]]*"?(sh|bash)'; then
+      echo "BLOCKED: awk program with 'system()' / shell pipe cannot be safely inspected. Ask user for explicit permission." >&2
+      exit 2
+    fi
   fi
 
   # --- Block piping to sh/bash (e.g. echo "rm -rf /" | sh) ---
@@ -908,12 +982,110 @@ check_single_command() {
       fi
       local resolved_redir
       resolved_redir=$(resolve_path "$REDIR_TARGET")
+      # Follow symlinks so that `echo x > project/link` where
+      # `link -> /etc/passwd` is caught. resolve_path only canonicalizes
+      # the dirname, not the basename — a symlink leaf slips through.
+      local redir_depth=20
+      while [[ -L "$resolved_redir" && $redir_depth -gt 0 ]]; do
+        local redir_link
+        redir_link=$(readlink "$resolved_redir")
+        if [[ "$redir_link" == /* ]]; then
+          resolved_redir=$(resolve_path "$redir_link")
+        else
+          resolved_redir=$(resolve_path "$(dirname "$resolved_redir")/$redir_link")
+        fi
+        redir_depth=$((redir_depth - 1))
+      done
+      if [[ -L "$resolved_redir" ]]; then
+        echo "BLOCKED: Redirect target symlink chain too deep or circular at '$resolved_redir'. Ask user for explicit permission." >&2
+        exit 2
+      fi
       if ! is_inside_project "$resolved_redir"; then
         echo "BLOCKED: Redirect target '$resolved_redir' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
       fi
     fi
   done
+
+  # --- sed -i: in-place edits on file arguments ---
+  # GNU `sed -i`, BSD `sed -i ''`, and `sed -iSUFFIX` all rewrite the file(s)
+  # passed as positional args. The non-in-place form is read-only and is left
+  # alone. We only engage when -i / --in-place is actually present.
+  if echo "$CMD" | grep -qE '(^|[[:space:]])sed($|[[:space:]])'; then
+    local sed_has_i=0
+    for raw_tok in "${CMD_TOKENS[@]}"; do
+      local tok
+      tok=$(strip_quotes "$raw_tok")
+      if [[ "$tok" == -i* ]] || [[ "$tok" == --in-place* ]]; then
+        sed_has_i=1
+        break
+      fi
+    done
+    if [ "$sed_has_i" -eq 1 ]; then
+      # Positional arguments after flags: the script (first non-flag) and the
+      # file(s) (rest). We validate every non-flag, non-option-value token;
+      # false positives on the script arg are fine because an expression like
+      # `s/x/y/` resolves inside the project and passes anyway.
+      local si=1 sn=${#CMD_TOKENS[@]}
+      while [ $si -lt $sn ]; do
+        local stok
+        stok=$(strip_quotes "${CMD_TOKENS[$si]}")
+        # Skip -e / -f / --expression= value tokens
+        case "$stok" in
+          -e|-f|--expression|--file)
+            si=$((si + 2)); continue ;;
+          -*|'') si=$((si + 1)); continue ;;
+        esac
+        # The sed script is typically s/…/…/ — skip anything that does not
+        # look like a path.
+        if [[ "$stok" =~ ^s[/|,].*[/|,] ]] || [[ "$stok" =~ ^[0-9] ]]; then
+          si=$((si + 1)); continue
+        fi
+        local sexp
+        sexp=$(expand_path "$stok")
+        if [[ "$sexp" != /* ]]; then
+          sexp="$EFFECTIVE_CWD/$sexp"
+        fi
+        local sresolved
+        sresolved=$(resolve_path "$sexp")
+        if ! is_inside_project "$sresolved"; then
+          echo "BLOCKED: 'sed -i' targets '$sresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+        si=$((si + 1))
+      done
+    fi
+  fi
+
+  # --- truncate: always rewrites the target file(s) ---
+  if echo "$CMD" | grep -qE '(^|[[:space:]])truncate($|[[:space:]])'; then
+    local tri=1 trn=${#CMD_TOKENS[@]}
+    while [ $tri -lt $trn ]; do
+      local trtok
+      trtok=$(strip_quotes "${CMD_TOKENS[$tri]}")
+      case "$trtok" in
+        -s|--size|-r|--reference|-o|--io-blocks)
+          tri=$((tri + 2)); continue ;;
+        -*|'') tri=$((tri + 1)); continue ;;
+      esac
+      # Skip a size literal stuck to -s, e.g. `-s0` after flag pre-trim
+      if [[ "$trtok" =~ ^[+=\<\>\%]?[0-9] ]]; then
+        tri=$((tri + 1)); continue
+      fi
+      local trexp
+      trexp=$(expand_path "$trtok")
+      if [[ "$trexp" != /* ]]; then
+        trexp="$EFFECTIVE_CWD/$trexp"
+      fi
+      local trresolved
+      trresolved=$(resolve_path "$trexp")
+      if ! is_inside_project "$trresolved"; then
+        echo "BLOCKED: 'truncate' targets '$trresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      tri=$((tri + 1))
+    done
+  fi
 
   # --- Chmod/chown outside project ---
   for CMD_NAME in chmod chown; do
