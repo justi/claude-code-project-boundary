@@ -8,5 +8,6 @@ source "$SCRIPT_DIR/helpers.sh"
 source "$SCRIPT_DIR/test_bash_guard.sh"
 source "$SCRIPT_DIR/test_file_guard.sh"
 source "$SCRIPT_DIR/test_true_negatives.sh"
+source "$SCRIPT_DIR/test_bypass_reproducers.sh"
 
 print_summary
