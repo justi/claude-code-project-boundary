@@ -680,8 +680,15 @@ check_single_command() {
     if [ "$vc" = '"' ] && [ $vin_sq -eq 0 ]; then vin_dq=$((1-vin_dq)); vi=$((vi+1)); continue; fi
     if [ $vin_sq -eq 0 ] && [ "$vc" = "\$" ] && [ $((vi+1)) -lt $vlen ]; then
       local vnext="${CMD_EXPAND_SCAN:$((vi+1)):1}"
+      # Explicit passthroughs — NOT parameter expansions:
+      #   $(...)   — command substitution, caught by the substitution detector
+      #   $'...'   — ANSI-C quoted literal (escape decoding, no expansion)
+      #   $"..."   — i18n string literal (no parameter expansion)
+      # Arithmetic `$((...))` is handled by the substitution detector.
+      if [ "$vnext" = "(" ] || [ "$vnext" = "'" ] || [ "$vnext" = '"' ]; then
+        :
       # Allow $HOME / ${HOME} — expand_path handles them.
-      if [[ "$vnext" =~ [A-Za-z_] ]]; then
+      elif [[ "$vnext" =~ [A-Za-z_] ]]; then
         local rest="${CMD_EXPAND_SCAN:$((vi+1))}"
         local vname="${rest%%[^A-Za-z0-9_]*}"
         if [ "$vname" != "HOME" ]; then
@@ -695,6 +702,15 @@ check_single_command() {
           echo "BLOCKED: Variable expansion '\${${vname}}' cannot be safely inspected. Ask user for explicit permission." >&2
           exit 2
         fi
+      # Positional ($0..$9) and special ($@ $* $# $? $$ $! $-) parameters.
+      # These expand at exec time to values the guard cannot inspect —
+      # e.g. `set -- /etc/passwd; rm $1` looks like `rm $1` (treated as a
+      # relative filename inside cwd) to the regex checks, but bash
+      # expands $1 to /etc/passwd at execution. Same fail-closed rule as
+      # $FOO applies — every non-HOME expansion is refused.
+      elif [[ "$vnext" =~ [0-9@*#?!\$\-] ]]; then
+        echo "BLOCKED: Shell parameter expansion '\$${vnext}' cannot be safely inspected. Ask user for explicit permission." >&2
+        exit 2
       fi
     fi
     vi=$((vi+1))

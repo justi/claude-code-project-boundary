@@ -159,4 +159,20 @@ expect_allowed 'source PROJECT/venv/bin/activate (relative allowed inside)' \
 expect_allowed '. PROJECT/utils.sh' \
   ". $PROJECT/utils.sh"
 
+# Positive cases for the broadened $VAR / positional-parameter detector.
+# Must allow literal dollar-delimited forms that are NOT parameter
+# expansion: ANSI-C quoting ($'...'), i18n strings ($"..."), arithmetic
+# $((...)), a literal `$` inside single quotes, and $HOME itself.
+expect_allowed "printf with ANSI-C quoted literal \$'\\n'" \
+  "printf 'hi'\$'\\n' > $PROJECT/tests/scratch.txt"
+
+expect_allowed "echo i18n string \$\"Hello\"" \
+  "echo \$\"Hello\" > $PROJECT/tests/scratch.txt"
+
+expect_allowed "arithmetic \$((1+2)) in redirect" \
+  "echo \$((1+2)) > $PROJECT/tests/scratch.txt"
+
+expect_allowed "literal \$ inside single quotes" \
+  "echo 'cost: \$1' > $PROJECT/tests/scratch.txt"
+
 echo ""
