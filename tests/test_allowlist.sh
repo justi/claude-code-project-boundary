@@ -192,6 +192,66 @@ expect_blocked "cd memory && wget -P /etc URL (wget directory-prefix escape)" \
 expect_blocked "cd memory && curl --output-dir /etc -O URL (curl output-dir escape)" \
   "cd $MEMORY_DIR && curl --output-dir /etc -O http://x"
 
+# ============================================================
+# Quoted-heredoc body must NOT trigger backtick/$(...) detector
+# ------------------------------------------------------------
+# `cat > allowlisted <<'EOF' ... EOF` — a quoted/escaped heredoc delimiter
+# (<<'EOF', <<"EOF", <<\EOF, <<-'EOF') tells bash to treat the body as a
+# literal: NO parameter/command/arithmetic substitution is performed, so
+# backticks and $(...) inside the body are just bytes written to stdin.
+# The global command-substitution detector currently fires on those bytes
+# and falsely blocks a legitimate write to an allowlisted path (the
+# auto-memory writer's canonical usage pattern).
+#
+# Must remain BLOCKED — do NOT let the heredoc-aware skip leak out:
+#   - unquoted <<EOF: bash DOES expand body → backtick/$(...) is real
+#   - `bash <<'EOF' ... EOF` / `sh <<\EOF ...`: body is executed by an
+#     inner shell regardless of delimiter quoting — covered by the
+#     shell-stdin-heredoc guard, which must stay strict.
+# ============================================================
+# Quoted single-quote delimiter — backtick in body
+_HD_CMD_SQ=$'cat > '"$MEMORY_DIR"$'/note_sq.md <<\'EOF\'\n`echo hi`\nEOF'
+expect_allowed "cat > memory <<'EOF' with backticks in body (literal, allowlisted)" \
+  "$_HD_CMD_SQ"
+
+# Quoted single-quote delimiter — $(...) in body
+_HD_CMD_SQ_DOLLAR=$'cat > '"$MEMORY_DIR"$'/note_sq_dollar.md <<\'EOF\'\n$(rm -rf /)\nEOF'
+expect_allowed "cat > memory <<'EOF' with \$(...) in body (literal, allowlisted)" \
+  "$_HD_CMD_SQ_DOLLAR"
+
+# Double-quoted delimiter — same no-expansion semantics
+_HD_CMD_DQ=$'cat > '"$MEMORY_DIR"$'/note_dq.md <<"EOF"\n`echo hi`\nEOF'
+expect_allowed "cat > memory <<\"EOF\" with backticks in body (literal, allowlisted)" \
+  "$_HD_CMD_DQ"
+
+# Backslash-escaped delimiter — same no-expansion semantics
+_HD_CMD_BS=$'cat > '"$MEMORY_DIR"$'/note_bs.md <<\\EOF\n`echo hi`\nEOF'
+expect_allowed "cat > memory <<\\EOF with backticks in body (literal, allowlisted)" \
+  "$_HD_CMD_BS"
+
+# Indented heredoc (<<-) with quoted delimiter — tabs stripped, no expansion
+_HD_CMD_IND=$'cat > '"$MEMORY_DIR"$'/note_ind.md <<-\'EOF\'\n\t`echo hi`\n\tEOF'
+expect_allowed "cat > memory <<-'EOF' (indented, quoted) with backticks in body" \
+  "$_HD_CMD_IND"
+
+# --- Regressions that MUST stay BLOCKED after the fix ---
+# Unquoted <<EOF: bash expands body → backtick is real command substitution.
+_HD_CMD_UNQUOTED=$'cat > '"$MEMORY_DIR"$'/note_unq.md <<EOF\n`evil`\nEOF'
+expect_blocked "cat > memory <<EOF (unquoted) with backticks — body IS expanded" \
+  "$_HD_CMD_UNQUOTED"
+
+_HD_CMD_UNQ_DOLLAR=$'cat > '"$MEMORY_DIR"$'/note_unq_d.md <<EOF\n$(evil)\nEOF'
+expect_blocked "cat > memory <<EOF (unquoted) with \$(...) — body IS expanded" \
+  "$_HD_CMD_UNQ_DOLLAR"
+
+# Quoted heredoc to a shell interpreter: body is executed by inner shell
+# regardless of delimiter quoting. Must stay blocked by the shell-stdin-
+# heredoc guard, NOT reach the backtick skip.
+expect_blocked "bash <<'EOF' ... EOF (quoted heredoc to shell executes body)" \
+  $'bash <<\'EOF\'\nrm -rf /\nEOF'
+expect_blocked "sh <<\\EOF ... EOF (escaped heredoc to shell executes body)" \
+  $'sh <<\\EOF\nrm -rf /\nEOF'
+
 # Codex round 9 — leading stdin redirect before shell
 expect_blocked "< /tmp/evil.sh bash (leading redirect feeding shell)" \
   "< /tmp/evil.sh bash"
