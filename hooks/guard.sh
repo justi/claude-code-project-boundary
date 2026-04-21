@@ -452,6 +452,162 @@ if [ -n "$FILE_PATH" ]; then
   exit 0
 fi
 
+# --- Blank out bodies of quoted/escaped heredocs for substitution scan ---
+# When bash reads a heredoc whose delimiter is quoted or backslash-escaped
+# (`<<'EOF'`, `<<"EOF"`, `<<\EOF`, `<<-'EOF'`), it does NOT perform
+# parameter/command/arithmetic expansion in the body. Backticks and
+# $(...) in such a body are therefore literal bytes written to stdin,
+# not command substitutions. The substitution detector further down
+# must not fire on those bytes, otherwise a legitimate
+#   cat > <allowlisted>/file <<'EOF'
+#   `echo hi`
+#   EOF
+# is wrongly blocked as "command substitution with backticks".
+#
+# This helper returns a copy of the input in which every quoted-heredoc
+# body is overwritten with spaces (newlines preserved so byte offsets
+# and line counts remain aligned). Unquoted heredoc bodies are left
+# untouched — bash DOES expand them, so substitution detection must
+# still fire there. Ambiguous / malformed input falls through to
+# returning the original (= fail closed on the main scan).
+#
+# Note: shell-stdin-heredoc blocking for `bash <<...` / `sh <<...` is
+# done elsewhere (shell_reads_from_stdin) on the original CMD and is
+# unaffected by this sanitization.
+blank_quoted_heredoc_bodies() {
+  local s="$1"
+  local n=${#s}
+  case "$s" in *"<<"*) ;; *) printf '%s' "$s"; return 0 ;; esac
+
+  # Build line index: LS[k]=start, LE[k]=offset of terminating '\n' (or n).
+  local -a LS=() LE=()
+  local i=0 ls=0
+  while [ $i -lt $n ]; do
+    if [ "${s:$i:1}" = $'\n' ]; then
+      LS+=("$ls"); LE+=("$i"); ls=$((i+1))
+    fi
+    i=$((i+1))
+  done
+  LS+=("$ls"); LE+=("$n")
+  local num_lines=${#LS[@]}
+
+  # Queue of pending heredocs: parallel arrays.
+  local -a HD=() HQ=() HI=() HB=()   # delim, quoted, indented(<<-), body_start
+  local -a BS=() BE=()               # ranges to blank: [BS[k], BE[k])
+
+  local li=0
+  while [ $li -lt $num_lines ]; do
+    local lstart=${LS[$li]} lend=${LE[$li]}
+    local line="${s:$lstart:$((lend-lstart))}"
+
+    if [ ${#HD[@]} -eq 0 ]; then
+      # Command context — scan for `<<` openers outside quotes.
+      local ci=0 clen=${#line} sq=0 dq=0 esc=0
+      while [ $ci -lt $clen ]; do
+        local c="${line:$ci:1}"
+        if [ $esc -eq 1 ]; then esc=0; ci=$((ci+1)); continue; fi
+        if [ "$c" = "\\" ] && [ $sq -eq 0 ]; then esc=1; ci=$((ci+1)); continue; fi
+        if [ "$c" = "'" ] && [ $dq -eq 0 ]; then sq=$((1-sq)); ci=$((ci+1)); continue; fi
+        if [ "$c" = '"' ] && [ $sq -eq 0 ]; then dq=$((1-dq)); ci=$((ci+1)); continue; fi
+        if [ $sq -eq 0 ] && [ $dq -eq 0 ] && [ "$c" = "<" ] && [ $((ci+1)) -lt $clen ] && [ "${line:$((ci+1)):1}" = "<" ]; then
+          # Skip `<<<` here-string — not a heredoc.
+          if [ $((ci+2)) -lt $clen ] && [ "${line:$((ci+2)):1}" = "<" ]; then
+            ci=$((ci+3)); continue
+          fi
+          local p=$((ci+2)) ind=0
+          if [ $p -lt $clen ] && [ "${line:$p:1}" = "-" ]; then ind=1; p=$((p+1)); fi
+          while [ $p -lt $clen ]; do
+            local ws="${line:$p:1}"
+            [ "$ws" = " " ] || [ "$ws" = $'\t' ] || break
+            p=$((p+1))
+          done
+          if [ $p -ge $clen ]; then
+            # Delimiter on next line — give up and return original (fail closed).
+            printf '%s' "$s"; return 0
+          fi
+          local f="${line:$p:1}" delim="" q=0 j=0
+          case "$f" in
+            "'")
+              j=$((p+1))
+              while [ $j -lt $clen ] && [ "${line:$j:1}" != "'" ]; do j=$((j+1)); done
+              if [ $j -ge $clen ]; then printf '%s' "$s"; return 0; fi
+              delim="${line:$((p+1)):$((j-p-1))}"; q=1; p=$((j+1)) ;;
+            '"')
+              j=$((p+1))
+              while [ $j -lt $clen ] && [ "${line:$j:1}" != '"' ]; do j=$((j+1)); done
+              if [ $j -ge $clen ]; then printf '%s' "$s"; return 0; fi
+              delim="${line:$((p+1)):$((j-p-1))}"; q=1; p=$((j+1)) ;;
+            "\\")
+              p=$((p+1)); j=$p
+              while [ $j -lt $clen ] && [[ "${line:$j:1}" =~ [A-Za-z0-9_] ]]; do j=$((j+1)); done
+              delim="${line:$p:$((j-p))}"; q=1; p=$j ;;
+            *)
+              j=$p
+              while [ $j -lt $clen ] && [[ "${line:$j:1}" =~ [A-Za-z0-9_] ]]; do j=$((j+1)); done
+              delim="${line:$p:$((j-p))}"; q=0; p=$j ;;
+          esac
+          if [ -z "$delim" ]; then printf '%s' "$s"; return 0; fi
+          HD+=("$delim"); HQ+=("$q"); HI+=("$ind"); HB+=("-1")
+          ci=$p; continue
+        fi
+        ci=$((ci+1))
+      done
+      # All heredocs discovered on this command-context line start body on NEXT line.
+      local qi=0
+      while [ $qi -lt ${#HB[@]} ]; do
+        if [ "${HB[$qi]}" = "-1" ]; then
+          HB[$qi]=$((lend+1))
+          [ $li -eq $((num_lines-1)) ] && HB[$qi]=$n
+        fi
+        qi=$((qi+1))
+      done
+    else
+      # Body context — check for terminator of queue head.
+      local hd="${HD[0]}" hq="${HQ[0]}" hi_flag="${HI[0]}" hbs="${HB[0]}"
+      local cmp="$line"
+      if [ "$hi_flag" = "1" ]; then
+        while [ ${#cmp} -gt 0 ] && [ "${cmp:0:1}" = $'\t' ]; do cmp="${cmp:1}"; done
+      fi
+      if [ "$cmp" = "$hd" ]; then
+        if [ "$hq" = "1" ] && [ "$hbs" != "-1" ] && [ $lstart -gt $hbs ]; then
+          BS+=("$hbs"); BE+=("$lstart")
+        fi
+        HD=("${HD[@]:1}"); HQ=("${HQ[@]:1}"); HI=("${HI[@]:1}"); HB=("${HB[@]:1}")
+      fi
+    fi
+    li=$((li+1))
+  done
+
+  # Any heredoc still open at EOF: blank remainder if quoted (tolerant of
+  # trailing newlines / missing terminator).
+  local qi=0
+  while [ $qi -lt ${#HD[@]} ]; do
+    if [ "${HQ[$qi]}" = "1" ] && [ "${HB[$qi]}" != "-1" ]; then
+      local hbs="${HB[$qi]}"
+      [ $n -gt $hbs ] && { BS+=("$hbs"); BE+=("$n"); }
+    fi
+    qi=$((qi+1))
+  done
+
+  if [ ${#BS[@]} -eq 0 ]; then printf '%s' "$s"; return 0; fi
+
+  # Emit output: copy bytes, replace blanked ranges with space (preserve '\n').
+  local out="" pos=0 bi=0 nb=${#BS[@]}
+  while [ $bi -lt $nb ]; do
+    local bs=${BS[$bi]} be=${BE[$bi]}
+    if [ $pos -lt $bs ]; then out+="${s:$pos:$((bs-pos))}"; fi
+    local k=0 blen=$((be-bs))
+    while [ $k -lt $blen ]; do
+      local bc="${s:$((bs+k)):1}"
+      if [ "$bc" = $'\n' ]; then out+=$'\n'; else out+=" "; fi
+      k=$((k+1))
+    done
+    pos=$be; bi=$((bi+1))
+  done
+  if [ $pos -lt $n ]; then out+="${s:$pos:$((n-pos))}"; fi
+  printf '%s' "$out"
+}
+
 # --- Check a single (non-chained) command against all guards ---
 check_single_command() {
   local CMD="$1"
@@ -469,6 +625,15 @@ check_single_command() {
     CMD="${CMD#sudo }"
     CMD="$(echo "$CMD" | sed 's/^[[:space:]]*//')"
   fi
+
+  # --- Snapshot raw CMD before alias-escape / paren normalization ---
+  # Alias normalization below strips `\` that precedes `[a-zA-Z_]`. That
+  # breaks detection of a backslash-escaped heredoc delimiter `<<\EOF`
+  # (bash treats it as quoted → literal body), which would be rewritten
+  # to `<<EOF` (unquoted → expandable body) and wrongly trip the
+  # substitution detector on literal backticks / $(...) in the body.
+  # blank_quoted_heredoc_bodies is computed from this raw copy.
+  local CMD_RAW="$CMD"
 
   # --- Normalize command-name prefixes for detection regexes ---
   # All destructive-command detection uses `(^|[[:space:]])<name>($|[[:space:]])`
@@ -491,31 +656,40 @@ check_single_command() {
   # Trim duplicated whitespace introduced by the substitutions.
   CMD="$(printf '%s' "$CMD" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
 
+  # --- Build a heredoc-sanitized view for expansion-scans ---
+  # $VAR and $(...)/backtick inside a *quoted* heredoc body are literal
+  # bytes written to the heredoc's stdin target, not shell expansions.
+  # Scanning them trips false positives on legitimate writes to an
+  # allowlisted path (see blank_quoted_heredoc_bodies above). Any
+  # command-name / path / redirect scan still uses the original CMD.
+  local CMD_EXPAND_SCAN
+  CMD_EXPAND_SCAN=$(blank_quoted_heredoc_bodies "$CMD_RAW")
+
   # --- Fail closed on unexpanded $VAR outside single quotes ---
   # `expand_path` only handles ~, $HOME, ${HOME}. Any other $VAR is kept
   # verbatim and then joined under $EFFECTIVE_CWD, so it looks "inside the
   # project" to the guard while Bash expands it at exec time. Treat it like
   # `$(…)`: if the value cannot be inspected, refuse.
-  local vi=0 vlen=${#CMD}
+  local vi=0 vlen=${#CMD_EXPAND_SCAN}
   local vin_sq=0 vin_dq=0 vin_esc=0
   while [ $vi -lt $vlen ]; do
-    local vc="${CMD:$vi:1}"
+    local vc="${CMD_EXPAND_SCAN:$vi:1}"
     if [ $vin_esc -eq 1 ]; then vin_esc=0; vi=$((vi+1)); continue; fi
     if [ "$vc" = "\\" ] && [ $vin_sq -eq 0 ]; then vin_esc=1; vi=$((vi+1)); continue; fi
     if [ "$vc" = "'" ] && [ $vin_dq -eq 0 ]; then vin_sq=$((1-vin_sq)); vi=$((vi+1)); continue; fi
     if [ "$vc" = '"' ] && [ $vin_sq -eq 0 ]; then vin_dq=$((1-vin_dq)); vi=$((vi+1)); continue; fi
     if [ $vin_sq -eq 0 ] && [ "$vc" = "\$" ] && [ $((vi+1)) -lt $vlen ]; then
-      local vnext="${CMD:$((vi+1)):1}"
+      local vnext="${CMD_EXPAND_SCAN:$((vi+1)):1}"
       # Allow $HOME / ${HOME} — expand_path handles them.
       if [[ "$vnext" =~ [A-Za-z_] ]]; then
-        local rest="${CMD:$((vi+1))}"
+        local rest="${CMD_EXPAND_SCAN:$((vi+1))}"
         local vname="${rest%%[^A-Za-z0-9_]*}"
         if [ "$vname" != "HOME" ]; then
           echo "BLOCKED: Variable expansion '\$${vname}' cannot be safely inspected. Ask user for explicit permission." >&2
           exit 2
         fi
       elif [ "$vnext" = "{" ]; then
-        local rest="${CMD:$((vi+2))}"
+        local rest="${CMD_EXPAND_SCAN:$((vi+2))}"
         local vname="${rest%%\}*}"
         if [ "$vname" != "HOME" ]; then
           echo "BLOCKED: Variable expansion '\${${vname}}' cannot be safely inspected. Ask user for explicit permission." >&2
@@ -540,10 +714,10 @@ check_single_command() {
   # `$((...))` is allowed — it's a numeric computation, not a command.
   # Similar rationale to blocking `bash -c` / `eval` — the inner command is
   # uninspectable.
-  local ci=0 clen=${#CMD}
+  local ci=0 clen=${#CMD_EXPAND_SCAN}
   local cin_sq=0 cin_dq=0 cin_esc=0
   while [ $ci -lt $clen ]; do
-    local cc="${CMD:$ci:1}"
+    local cc="${CMD_EXPAND_SCAN:$ci:1}"
     if [ $cin_esc -eq 1 ]; then
       cin_esc=0
       ci=$((ci + 1))
@@ -571,9 +745,9 @@ check_single_command() {
         echo "BLOCKED: Command substitution with backticks cannot be safely inspected. Ask user for explicit permission." >&2
         exit 2
       fi
-      if [ "$cc" = "\$" ] && [ $((ci + 1)) -lt $clen ] && [ "${CMD:$((ci + 1)):1}" = "(" ]; then
+      if [ "$cc" = "\$" ] && [ $((ci + 1)) -lt $clen ] && [ "${CMD_EXPAND_SCAN:$((ci + 1)):1}" = "(" ]; then
         # Skip arithmetic expansion $((...)): next-next char is also (
-        if [ $((ci + 2)) -ge $clen ] || [ "${CMD:$((ci + 2)):1}" != "(" ]; then
+        if [ $((ci + 2)) -ge $clen ] || [ "${CMD_EXPAND_SCAN:$((ci + 2)):1}" != "(" ]; then
           echo "BLOCKED: Command substitution '\$(...)' cannot be safely inspected. Ask user for explicit permission." >&2
           exit 2
         fi
