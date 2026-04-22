@@ -594,15 +594,35 @@ blank_quoted_heredoc_bodies() {
 
   if [ ${#BS[@]} -eq 0 ]; then printf '%s' "$s"; return 0; fi
 
-  # Emit output: copy bytes, replace blanked ranges with space (preserve '\n').
+  # Emit output: copy bytes, replace blanked ranges with space.
+  # Newlines inside body ranges are preserved by default so byte
+  # offsets and line counts remain aligned for line-based scanners.
+  # Pass "blank_newlines" as the second arg to also replace body
+  # newlines with spaces — needed by split_and_check, which would
+  # otherwise treat a newline INSIDE a quoted heredoc body as a
+  # command separator and slice the heredoc into pseudo-subcommands.
+  local blank_nl="${2:-preserve}"
   local out="" pos=0 bi=0 nb=${#BS[@]}
   while [ $bi -lt $nb ]; do
     local bs=${BS[$bi]} be=${BE[$bi]}
+    # In blank_newlines mode, also subsume the newline that immediately
+    # PRECEDES the body — that newline ends the heredoc opener line
+    # syntactically (it's not a command separator and not a body byte
+    # either). Without subsuming it, split_and_check would treat it as
+    # a real newline-separator and slice the heredoc opener away from
+    # its body, exposing the raw body to downstream walkers.
+    if [ "$blank_nl" = "blank_newlines" ] && [ $bs -gt 0 ] && [ "${s:$((bs-1)):1}" = $'\n' ]; then
+      bs=$((bs-1))
+    fi
     if [ $pos -lt $bs ]; then out+="${s:$pos:$((bs-pos))}"; fi
     local k=0 blen=$((be-bs))
     while [ $k -lt $blen ]; do
       local bc="${s:$((bs+k)):1}"
-      if [ "$bc" = $'\n' ]; then out+=$'\n'; else out+=" "; fi
+      if [ "$bc" = $'\n' ] && [ "$blank_nl" != "blank_newlines" ]; then
+        out+=$'\n'
+      else
+        out+=" "
+      fi
       k=$((k+1))
     done
     pos=$be; bi=$((bi+1))
@@ -1913,7 +1933,7 @@ split_and_check() {
   # pseudo-commands; the second (`rm $X\nEOF`) loses heredoc context
   # and the $VAR detector false-positives.
   local scan_cmd
-  scan_cmd=$(blank_quoted_heredoc_bodies "$full_cmd")
+  scan_cmd=$(blank_quoted_heredoc_bodies "$full_cmd" blank_newlines)
   # Defensive: if helper returned a different length (it should not),
   # fall back to scanning full_cmd directly to preserve original
   # semantics.
@@ -1964,8 +1984,21 @@ split_and_check() {
         fi
       fi
 
-      # Check for ;
-      if [ "$ch" = ";" ]; then
+      # Check for ; or literal newline — bash treats both as command
+      # terminators. Without splitting on newline, a multi-line command
+      # like `echo ok\nbash /tmp/evil.sh` reaches every "first-token"
+      # detector as a single subcommand whose name is `echo`, hiding
+      # the script-execute on the second line. scan_cmd has heredoc
+      # body bytes blanked (with newlines preserved), but body
+      # newlines were never command separators in bash anyway — they
+      # are part of the heredoc payload. The split here uses scan_cmd,
+      # so a newline INSIDE a quoted heredoc body is still a blanked
+      # space-equivalent (no, actually preserved newlines per the
+      # helper) but the surrounding heredoc terminator/delimiter
+      # parsing keeps the body single-subcommand because the
+      # tokenizer downstream re-reads CMD verbatim. In practice: split
+      # on newlines outside quotes / heredoc bodies.
+      if [ "$ch" = ";" ] || [ "$ch" = $'\n' ]; then
         subcmds+=("$current")
         current=""
         prev_ch="$ch"
