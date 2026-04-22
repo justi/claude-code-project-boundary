@@ -667,4 +667,23 @@ expect_allowed "/usr/bin/echo hello (command position)" \
 expect_allowed "echo /bin/sh (literal arg, no write tool)" \
   "echo /bin/sh"
 
+# Wrapper + /bin/<cmd> regression coverage. Without the tokenize-aware
+# strip, `nice /bin/rm /etc/x` and friends would not match the rm/cp/...
+# command-name regexes (the bare-name regex sees only `/bin/rm`) and
+# slip past the destructive-command detectors.
+expect_blocked "nice /bin/rm /etc/passwd_test (wrapper + /bin/cmd)" \
+  "nice /bin/rm /etc/passwd_test"
+
+expect_blocked "timeout 5 /bin/rm /etc/passwd_test (wrapper + numeric arg)" \
+  "timeout 5 /bin/rm /etc/passwd_test"
+
+expect_blocked "env /bin/rm /etc/passwd_test (env + /bin/cmd)" \
+  "env /bin/rm /etc/passwd_test"
+
+expect_blocked "env FOO=bar /bin/rm /etc/passwd_test (env+VAR=val)" \
+  "env FOO=bar /bin/rm /etc/passwd_test"
+
+expect_blocked "nohup /bin/curl -o /etc/passwd_test (wrapper + tool)" \
+  "nohup /bin/curl -o /etc/passwd_test http://example.com"
+
 echo ""

@@ -195,6 +195,77 @@ glob_to_regex() {
 # `/opt/homebrew/bin/bash`, `/nix/store/.../bin/bash`, `/bin/bash` all
 # count as the shell `bash`. Without basename matching, the exec guard
 # only fires for paths in the hard-coded normalization list.
+# Strip a binary path prefix (/bin/, /sbin/, /usr/bin/, /usr/sbin/,
+# /usr/local/bin/) from the command-name token of CMD only — not from
+# any argument or operand. Walks past common runtime wrappers
+# (sudo/env/nice/...), VAR=val assignments, and flags to find the real
+# command-name position. The strip is a single in-place replacement of
+# the prefixed token, leaving the rest of CMD (including operands
+# that legitimately reference `/bin/<name>` as paths) untouched.
+#
+# Required because the previous "match whitespace before /bin/"
+# normalisation also matched the whitespace BEFORE every operand,
+# rewriting `rm /bin/sh` to `rm sh`, `tee /bin/owned` to `tee owned`,
+# etc., which then resolved into the project and bypassed the
+# boundary (Codex review on commit e01df86 — bypass A).
+strip_command_name_prefix() {
+  local cmd="$1"
+  local -a toks=()
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    toks+=("$t")
+  done < <(tokenize_args "$cmd")
+
+  local idx=-1 i
+  local prev_was_timeout=0
+  for i in "${!toks[@]}"; do
+    local raw="${toks[$i]}"
+    local t
+    t=$(strip_quotes "$raw")
+    # `timeout` takes a duration operand (e.g. `timeout 5 cmd`,
+    # `timeout 1.5s cmd`); skip one extra token after it.
+    if [ $prev_was_timeout -eq 1 ]; then
+      prev_was_timeout=0
+      case "$t" in
+        [0-9]*) continue ;;
+      esac
+    fi
+    case "$t" in
+      timeout)
+        prev_was_timeout=1; continue ;;
+      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
+        continue ;;
+    esac
+    case "$t" in
+      [A-Za-z_]*=*) continue ;;
+      -*) continue ;;
+    esac
+    idx=$i
+    break
+  done
+
+  [[ $idx -lt 0 ]] && { printf '%s' "$cmd"; return; }
+
+  local first
+  first=$(strip_quotes "${toks[$idx]}")
+  case "$first" in
+    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) ;;
+    *) printf '%s' "$cmd"; return ;;
+  esac
+
+  local cmdname="${first##*/}"
+
+  # Replace first occurrence of $first in $cmd with $cmdname.
+  # Pattern matching here treats $first verbatim (it cannot contain
+  # bash glob metacharacters in any realistic command-name position).
+  local prefix="${cmd%%${first}*}"
+  if [ "$prefix" = "$cmd" ]; then
+    printf '%s' "$cmd"; return
+  fi
+  local rest="${cmd:$((${#prefix} + ${#first}))}"
+  printf '%s%s%s' "$prefix" "$cmdname" "$rest"
+}
+
 is_shell_token() {
   local _t="$1"
   local _base="${_t##*/}"
@@ -674,17 +745,16 @@ check_single_command() {
   CMD="$(printf '%s' "$CMD" | sed -E 's/(^|[[:space:]])\(+/\1/g; s/\)+($|[[:space:]])/\1/g')"
   # Strip a backslash that precedes a shell-word character (alias escape).
   CMD="$(printf '%s' "$CMD" | sed -E 's/\\([a-zA-Z_])/\1/g')"
-  # Strip common binary path prefixes so `/bin/rm` → `rm`, `/usr/bin/curl` → `curl`.
-  # Two passes — must NOT match inside redirect targets like `echo x > /bin/owned`,
-  # which would otherwise collapse to `echo x > owned` and bypass the boundary
-  # check (Copilot review on PR #12).
-  #   Pass 1: at start of CMD (always command position after upstream trim).
-  #   Pass 2: after a "real" character that is not a redirect/pipe/separator.
-  # Subcommand separators &&/||/;/| are already split off by split_and_check
-  # before this function runs, so a /bin/foo appearing here is either
-  # command-position (stripped) or an argument/redirect target (preserved).
+  # Strip the common binary path prefix from the command-name token so
+  # that `/bin/rm` is recognised as `rm` by every command-name regex.
+  # MUST NOT touch operand or redirect-target tokens — see the helper
+  # docstring for the bypass shape this guards against (Codex review
+  # on commit e01df86, bypass A). The previous sed-based fallback for
+  # the start-of-CMD case is preserved so that a CMD whose tokenizer
+  # output is empty (defensively impossible but cheap) still gets the
+  # leading prefix stripped.
   CMD="$(printf '%s' "$CMD" | sed -E 's#^/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/##')"
-  CMD="$(printf '%s' "$CMD" | sed -E 's#([^<>|&;[:space:]])[[:space:]]+/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/#\1 #g')"
+  CMD="$(strip_command_name_prefix "$CMD")"
   # Trim duplicated whitespace introduced by the substitutions.
   CMD="$(printf '%s' "$CMD" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
 
