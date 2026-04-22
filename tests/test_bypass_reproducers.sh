@@ -431,3 +431,78 @@ expect_allowed "php PROJECT/script.php (no inline-code flag)" \
   "php $PROJECT/CHANGELOG.md"
 
 echo ""
+
+# ============================================================
+# 14. is_write_permitted does not dereference inside-project symlinks
+# ------------------------------------------------------------
+# is_write_permitted at hooks/guard.sh:381 returns true as soon as
+# is_inside_project succeeds — without following the leaf symlink.
+# Every write-style detector that reaches the function on a Bash-side
+# command (tee, sed -i, truncate, curl -o, wget -O, dd of=, the
+# redirect-target scanner does its own deref) trusts the lexical
+# inside-project check. So:
+#   ln -s /etc/passwd_test PROJECT/evil_link && tee PROJECT/evil_link
+# writes outside the project because PROJECT/evil_link is lexically
+# inside but resolves to /etc/passwd_test.
+#
+# The Edit/Write tool branch (line ~430) already does a full readlink
+# loop before calling is_write_permitted, so it's unaffected. The
+# allowlist branch of is_write_permitted also derefs (line ~394). The
+# missing deref is the inside-project branch when reached from a Bash
+# command.
+# Reported by Copilot review on PR #12 (commit 7641a412).
+# ============================================================
+echo "--- 14. write through inside-project symlink (no deref in is_write_permitted) ---"
+
+# Setup helper: create a symlink inside the project pointing outside.
+# Asserted as a test so a filesystem without symlink support produces
+# a clear FAIL rather than misleading silent ALLOWs.
+ln -sf /etc/passwd_test "$PROJECT/evil_write_link" 2>/dev/null
+TOTAL=$((TOTAL + 1))
+if [[ -L "$PROJECT/evil_write_link" ]]; then
+  echo "PASS: setup: inside-project symlink created for write-leak test"
+  PASS=$((PASS + 1))
+
+  expect_blocked "tee via inside-project symlink to outside" \
+    "tee $PROJECT/evil_write_link"
+
+  expect_blocked "sed -i via inside-project symlink to outside" \
+    "sed -i 's/a/b/' $PROJECT/evil_write_link"
+
+  expect_blocked "truncate via inside-project symlink to outside" \
+    "truncate -s 0 $PROJECT/evil_write_link"
+
+  expect_blocked "curl -o via inside-project symlink to outside" \
+    "curl -o $PROJECT/evil_write_link http://example.com"
+
+  expect_blocked "wget -O via inside-project symlink to outside" \
+    "wget -O $PROJECT/evil_write_link http://example.com"
+
+  expect_blocked "dd of= via inside-project symlink to outside" \
+    "dd of=$PROJECT/evil_write_link if=/dev/zero"
+else
+  echo "FAIL: setup: could not create inside-project symlink at $PROJECT/evil_write_link"
+  FAIL=$((FAIL + 1))
+fi
+rm -f "$PROJECT/evil_write_link"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - in-project regular file (no symlink)
+# - inside-project symlink that points to another inside-project file
+expect_allowed "tee on a regular in-project file" \
+  "tee $PROJECT/tests/scratch.txt"
+
+ln -sf "$PROJECT/CHANGELOG.md" "$PROJECT/inside_link" 2>/dev/null
+TOTAL=$((TOTAL + 1))
+if [[ -L "$PROJECT/inside_link" ]]; then
+  echo "PASS: setup: inside-project symlink to in-project target created"
+  PASS=$((PASS + 1))
+  expect_allowed "tee via symlink whose ultimate target is in-project" \
+    "tee $PROJECT/inside_link"
+else
+  echo "FAIL: setup: could not create inside-project to inside-project symlink"
+  FAIL=$((FAIL + 1))
+fi
+rm -f "$PROJECT/inside_link"
+
+echo ""
