@@ -350,3 +350,42 @@ expect_allowed "/usr/bin/echo hello inside project" \
   "/usr/bin/echo hello"
 
 echo ""
+
+# ============================================================
+# 12. `--` end-of-options ignored by sed -i / truncate parsers
+# ------------------------------------------------------------
+# The flag walkers for sed -i (line ~1730) and truncate (line ~1762)
+# treat ANY token starting with `-` as an option and skip it. POSIX
+# `--` signals end-of-options: every token after `--` is a positional
+# operand, even if its name starts with `-`. Without handling `--`, a
+# file operand whose name begins with `-` is skipped as an unknown
+# flag, never reaching is_write_permitted.
+# Reported by Copilot review on PR #12.
+# ============================================================
+echo "--- 12. -- end-of-options ignored by sed/truncate parsers ---"
+
+expect_blocked "sed -i with -- and dash-prefix file in /tmp cwd" \
+  "cd /tmp && sed -i 's/a/b/' -- -owned"
+
+expect_blocked "sed -i with -- and absolute outside path that starts with -" \
+  "sed -i 's/a/b/' -- -owned"
+
+expect_blocked "truncate with -- and dash-prefix file in /tmp cwd" \
+  "cd /tmp && truncate -s 0 -- -owned"
+
+expect_blocked "truncate with -- and absolute outside path that starts with -" \
+  "truncate -s 0 -- -owned"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - operand after -- inside the project boundary
+# - normal flag walking still works (no regression in option parsing)
+expect_allowed "sed -i 's/a/b/' -- PROJECT/tests/file (in-project after --)" \
+  "sed -i 's/a/b/' -- $PROJECT/tests/file"
+
+expect_allowed "truncate -s 0 -- PROJECT/tests/file (in-project after --)" \
+  "truncate -s 0 -- $PROJECT/tests/file"
+
+expect_allowed "sed -i 's/a/b/' PROJECT/tests/file (no --, normal call)" \
+  "sed -i 's/a/b/' $PROJECT/tests/file"
+
+echo ""
