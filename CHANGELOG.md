@@ -5,6 +5,25 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] — 2026-04-22
+
+### Security — closes 2 further bypasses from `codex review --base main`
+
+- **Positional / special parameter expansion (P1)** — the `$VAR` fail-closed scan only matched `$` followed by `[A-Za-z_]` or `{`. Every other shell parameter slipped through, so `set -- /etc/passwd; rm $1` was accepted while bash expanded the path at exec time. The detector now also fires on `$` followed by digit, `@`, `*`, `#`, `?`, `!`, `$`, `-`, catching `$0..$9`, `$@`, `$*`, `$#`, `$?`, `$$`, `$!`, `$-`. Explicit passthroughs added for `$(`, `$'…'`, `$"…"` (not parameter expansion).
+- **`truncate` digit-leading filename (P2)** — the size-literal skip regex also matched filenames whose basename started with a digit. In an outside cwd, `truncate -s 0 123.log` zeroed `/tmp/123.log` because the target was skipped as if it were a size. The bare-digit skip is removed; GNU/BSD size values always travel with `-s` (consumed as flag+value pair) or attach as `-sN` / `--size=N` (caught by `-*`). Every remaining non-option token is a file operand.
+
+### Fixed — false positives
+
+- **Quoted / escaped heredoc body** — the `$(…)` / backtick / `$VAR` detector scanned the whole `CMD` and fired on bytes inside `<<'EOF'`, `<<"EOF"`, `<<\EOF`, `<<-'EOF'` bodies even though bash does not expand them. Canonical auto-memory writes like `cat > memory/note.md <<'EOF' … \`x\` … EOF` were refused despite the allowlisted target. New `blank_quoted_heredoc_bodies` helper neutralises such bodies (preserving byte offsets and newlines) for the expansion detectors only; command-name, path and redirect scans still see the original `CMD`. `CMD_RAW` is snapshot before the alias-escape normalisation so `<<\EOF` is recognised as quoted. Unquoted `<<EOF` bodies and `bash <<'EOF'` / `sh <<\EOF` script-execute remain strict.
+- **`sed -i` non-substitute programs** — the script-shape heuristic (`^s[/|,]…[/|,]` or `^[0-9]`) blocked every other valid program, so `sed -i '/debug/d' src/file`, `sed -i '' '/foo/d' file` (BSD), `sed -i.bak '/foo/d' file`, and `sed -i 'y/abc/xyz/' file` were rejected — `/debug/d` looked like an absolute outside path to the validator. Replaced by grammar-aware positional tracking: if no `-e/-f/--expression=/--file=` is present, the first non-flag positional is the script (skipped); every other positional is a file routed to `is_write_permitted`. Regressions covering `-i*` variants targeting `/etc` stay blocked.
+
+### Tests
+
+- `tests/test_bypass_reproducers.sh` — 2 new categories (positional parameters, truncate digit-leading).
+- `tests/test_allowlist.sh` — 5 quoted-heredoc positive cases + 4 regressions (unquoted body, shell-stdin-heredoc).
+- `tests/test_true_negatives.sh` — sed non-substitute positive cases (pattern-delete, pattern-print, transliterate, BSD empty extension, attached `-i.bak`, explicit `-e`) + blocked regressions; `$VAR` positive cases (ANSI-C quoting, i18n strings, arithmetic, literal `$` in single quotes).
+- Full suite: **515 passed / 0 failed**.
+
 ## [1.3.0] — 2026-04-22
 
 ### Security — closes 8th bypass category + symlink/redirect/wrapper hardening
