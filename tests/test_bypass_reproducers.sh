@@ -506,3 +506,52 @@ fi
 rm -f "$PROJECT/inside_link"
 
 echo ""
+
+# ============================================================
+# 15. Newline as command separator ignored by split_and_check
+# ------------------------------------------------------------
+# Bash treats a literal newline as a command terminator, equivalent to
+# `;`. split_and_check at hooks/guard.sh:1908 only splits on
+# `&&`, `||`, `;`, `|` — newlines are passed through into a single
+# subcommand. As a result, the FIRST line's command name is what
+# every "first-token" detector sees (script-execute, env wrappers,
+# etc.); a destructive command on the SECOND line slips past those
+# detectors that look only at command position.
+#
+# Concrete bypass:
+#   echo ok\n
+#   bash /tmp/evil.sh
+# is treated as a single subcommand whose command-name is `echo`. The
+# script-execute detector never sees `bash /tmp/evil.sh` in command
+# position and the outside script execution is allowed.
+# Reported by Codex review on commit e01df86.
+# ============================================================
+echo "--- 15. newline command separator ignored ---"
+
+expect_blocked "echo ok\\n bash /tmp/evil.sh (script-execute on line 2)" \
+  "echo ok
+bash /tmp/evil.sh"
+
+expect_blocked "true\\n source /tmp/evil.sh" \
+  "true
+source /tmp/evil.sh"
+
+expect_blocked "echo hi\\n /bin/bash /tmp/evil.sh" \
+  "echo hi
+/bin/bash /tmp/evil.sh"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - newline-separated commands all in-project
+# - heredoc body containing newlines (must NOT be split)
+expect_allowed "echo a\\n echo b (both safe)" \
+  "echo a
+echo b"
+
+expect_allowed "git commit -F - <<'EOF' body has newlines (must not split)" \
+  "git commit -F - <<'EOF'
+fix something
+
+with body line
+EOF"
+
+echo ""
