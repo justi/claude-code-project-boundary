@@ -652,7 +652,16 @@ check_single_command() {
   # Strip a backslash that precedes a shell-word character (alias escape).
   CMD="$(printf '%s' "$CMD" | sed -E 's/\\([a-zA-Z_])/\1/g')"
   # Strip common binary path prefixes so `/bin/rm` → `rm`, `/usr/bin/curl` → `curl`.
-  CMD="$(printf '%s' "$CMD" | sed -E 's#(^|[[:space:]])/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/#\1#g')"
+  # Two passes — must NOT match inside redirect targets like `echo x > /bin/owned`,
+  # which would otherwise collapse to `echo x > owned` and bypass the boundary
+  # check (Copilot review on PR #12).
+  #   Pass 1: at start of CMD (always command position after upstream trim).
+  #   Pass 2: after a "real" character that is not a redirect/pipe/separator.
+  # Subcommand separators &&/||/;/| are already split off by split_and_check
+  # before this function runs, so a /bin/foo appearing here is either
+  # command-position (stripped) or an argument/redirect target (preserved).
+  CMD="$(printf '%s' "$CMD" | sed -E 's#^/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/##')"
+  CMD="$(printf '%s' "$CMD" | sed -E 's#([^<>|&;[:space:]])[[:space:]]+/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/#\1 #g')"
   # Trim duplicated whitespace introduced by the substitutions.
   CMD="$(printf '%s' "$CMD" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
 
