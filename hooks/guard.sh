@@ -542,11 +542,11 @@ blank_quoted_heredoc_bodies() {
               delim="${line:$((p+1)):$((j-p-1))}"; q=1; p=$((j+1)) ;;
             "\\")
               p=$((p+1)); j=$p
-              while [ $j -lt $clen ] && [[ "${line:$j:1}" =~ [A-Za-z0-9_] ]]; do j=$((j+1)); done
+              while [ $j -lt $clen ] && [[ "${line:$j:1}" =~ [A-Za-z0-9_.+:=,/@%^-] ]]; do j=$((j+1)); done
               delim="${line:$p:$((j-p))}"; q=1; p=$j ;;
             *)
               j=$p
-              while [ $j -lt $clen ] && [[ "${line:$j:1}" =~ [A-Za-z0-9_] ]]; do j=$((j+1)); done
+              while [ $j -lt $clen ] && [[ "${line:$j:1}" =~ [A-Za-z0-9_.+:=,/@%^-] ]]; do j=$((j+1)); done
               delim="${line:$p:$((j-p))}"; q=0; p=$j ;;
           esac
           if [ -z "$delim" ]; then printf '%s' "$s"; return 0; fi
