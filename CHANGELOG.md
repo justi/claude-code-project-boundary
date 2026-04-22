@@ -5,6 +5,23 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.1] — 2026-04-22
+
+### Fixed — false positives
+
+- **Heredoc-body operators split into pseudo-commands** — `split_and_check` segmented the full `CMD` on `&&` / `||` / `;` / `|` without heredoc awareness, so a quoted-heredoc body line like `X=/etc/x && rm $X` was rotated into two pseudo-commands. The second (`rm $X\nEOF`) lost heredoc context, `blank_quoted_heredoc_bodies` found no opener, and the `$VAR` detector wrongly fired on a byte the parser never expands. Fix: tokenize a heredoc-blanked copy of the command for operator-position detection while preserving original bytes in each subcommand slice. Defensive fallback: if the helper returns a different length than the input, scan the raw `CMD` (preserving original semantics over silent mis-splitting). Surfaced when using `gh pr edit --body-file -` with a body that mentions shell operators alongside `$VAR` examples — exactly the kind of content this guard is documented to allow under `<<'EOF'`.
+- **Shell-token word inside heredoc body** — the stdin-redirect-feeds-shell detector tokenized the entire `CMD` including quoted-heredoc body bytes, set `_saw_redir=1` on the opening `<<`, then fired on any later token matching `is_shell_token` / `is_source_token`. So a `git commit -F - <<'EOF'` whose body mentioned the word "bash", "sh", "source" etc. was refused with `"Stdin redirection feeding shell cannot be safely inspected"` even though the parser never executes a single byte of that body. Fix: build a parallel `CMD_TOKENS_EXEC_SCAN` from a heredoc-blanked copy of the command, used ONLY by the `_saw_redir` loop. Genuine shell-stdin attacks (`< /tmp/x bash`, `FOO=1 < /tmp/x bash`, `nice < /tmp/x bash`, `bash <<'EOF' … EOF`, `bash <<<'rm -rf /'`, attached `bash</tmp/x>`) keep firing because the interpreter token sits OUTSIDE any heredoc body and is not blanked.
+
+### Tests
+
+- `tests/test_true_negatives.sh` — 4 positive cases for heredoc-body operators (`&&`, `||`, `;` combined with `$X` / `$1` / `$@`); 3 positive cases for shell-token words in body (`bash`, `sh`, `source`); 3 regression cases for the genuine stdin-redirect attacks (leading redirect, redirect after VAR=val, redirect after wrapper) that the FP fix must not weaken.
+- Full suite: **525 passed / 0 failed**.
+
+### Notes
+
+- Both false positives were surfaced inside this same PR while the model used `git commit -F -` per the SessionStart hint — a meta-confirmation that the hint successfully steers Claude toward the fail-closed path.
+- No new bypass categories. No API changes. SemVer patch bump from 1.4.0.
+
 ## [1.4.0] — 2026-04-22
 
 ### Security — closes 2 further bypasses from `codex review --base main`
