@@ -994,6 +994,25 @@ check_single_command() {
     CMD_TOKENS_EXEC+=("$_etok")
   done < <(tokenize_args "$_exec_cmd")
 
+  # A parallel token stream built from a heredoc-blanked copy of CMD.
+  # Used ONLY by the `_saw_redir`/`exec_kind` scans below, which otherwise
+  # would treat a quoted-heredoc body byte like "bash" or "source" as a
+  # shell token and false-positive with
+  #   "Stdin redirection feeding shell cannot be safely inspected"
+  # on perfectly innocuous text like a git-commit body mentioning `bash`.
+  # Real shell-stdin attacks (`bash << /tmp/x`, `< /tmp/x bash`,
+  # `bash <<'EOF' ... EOF`, `bash <<<'rm -rf /'`, attached `bash</tmp/x>`)
+  # still appear in this stream because their shell token sits OUTSIDE
+  # any heredoc body, so the fail-closed detectors keep firing.
+  local _exec_cmd_scan
+  _exec_cmd_scan=$(blank_quoted_heredoc_bodies "$CMD" \
+                   | sed -E 's/(<<-|<<<|<<|<)/ \1 /g')
+  local -a CMD_TOKENS_EXEC_SCAN=()
+  while IFS= read -r _etok; do
+    [[ -z "$_etok" ]] && continue
+    CMD_TOKENS_EXEC_SCAN+=("$_etok")
+  done < <(tokenize_args "$_exec_cmd_scan")
+
   local exec_kind="" exec_shell_idx=-1
   local _ti=0 _tn=${#CMD_TOKENS_EXEC[@]}
 
@@ -1003,9 +1022,10 @@ check_single_command() {
   # `FOO=1 < /tmp/evil.sh bash`, `nice < /tmp/evil.sh bash`, and a bare
   # `< /tmp/evil.sh bash` all feed the shell from an uninspectable source.
   local _rk=0 _saw_redir=0
-  while [ $_rk -lt $_tn ]; do
+  local _tn_scan=${#CMD_TOKENS_EXEC_SCAN[@]}
+  while [ $_rk -lt $_tn_scan ]; do
     local _rtok_chk
-    _rtok_chk=$(strip_quotes "${CMD_TOKENS_EXEC[$_rk]}")
+    _rtok_chk=$(strip_quotes "${CMD_TOKENS_EXEC_SCAN[$_rk]}")
     case "$_rtok_chk" in
       \<|\<\<|\<\<\<|\<\<-) _saw_redir=1 ;;
       *)
