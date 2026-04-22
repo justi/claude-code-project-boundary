@@ -312,3 +312,41 @@ expect_allowed "truncate -s0 PROJECT/tests/file.log (attached -s0)" \
   "truncate -s0 $PROJECT/tests/file.log"
 
 echo ""
+
+# ============================================================
+# 11. CMD-normalization corrupts redirect targets
+# ------------------------------------------------------------
+# `check_single_command` strips common binary path prefixes
+# (`/bin/`, `/usr/bin/`, `/sbin/`, `/usr/sbin/`, `/usr/local/bin/`)
+# from the entire CMD string so that `/bin/rm` is recognized as `rm`.
+# The regex matches any `(^|whitespace)/bin/...`, including the
+# whitespace AFTER a redirect operator. As a result,
+#   echo x > /bin/owned
+# is rewritten to `echo x > owned`, the redirect target collapses to
+# a relative inside-project path, and the boundary check passes —
+# while bash physically writes to /bin/owned outside the project.
+# Reported by Copilot review on PR #12.
+# ============================================================
+echo "--- 11. cmd-normalization corrupts redirect targets ---"
+
+expect_blocked "redirect to /bin/owned (path-prefix stripped from target)" \
+  "echo x > /bin/owned"
+
+expect_blocked "redirect to /usr/bin/owned" \
+  "echo pwned > /usr/bin/owned"
+
+expect_blocked "append to /sbin/owned" \
+  "echo x >> /sbin/owned"
+
+expect_blocked "redirect to /usr/local/bin/owned" \
+  "echo x > /usr/local/bin/owned"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - the original /bin/<command> command-name normalization still works
+expect_allowed "/bin/cat PROJECT/file (command-name path prefix still recognized)" \
+  "/bin/cat $PROJECT/CHANGELOG.md"
+
+expect_allowed "/usr/bin/echo hello inside project" \
+  "/usr/bin/echo hello"
+
+echo ""
