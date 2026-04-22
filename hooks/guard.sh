@@ -732,6 +732,23 @@ check_single_command() {
     CMD_TOKENS+=("$tok")
   done < <(tokenize_args "$CMD")
 
+  # Parallel token stream built from a heredoc-blanked copy of CMD.
+  # Used by detectors that walk tokens looking for a marker word
+  # (sed, truncate, ">"-redirect operator) and would otherwise pick up
+  # heredoc body bytes as if they were live commands. A commit-message
+  # body that happens to mention "sed -i /etc/foo" or "> /bin/owned"
+  # must NOT be parsed as a real sed/redirect call — bash never
+  # executes a single byte of a quoted heredoc body. Real attacks are
+  # unaffected because the marker tokens sit OUTSIDE any heredoc body
+  # and survive the blanking pass.
+  local CMD_BLANKED
+  CMD_BLANKED=$(blank_quoted_heredoc_bodies "$CMD")
+  local -a CMD_TOKENS_SCAN=()
+  while IFS= read -r tok; do
+    [[ -z "$tok" ]] && continue
+    CMD_TOKENS_SCAN+=("$tok")
+  done < <(tokenize_args "$CMD_BLANKED")
+
   # --- Block command substitution outside single quotes ---
   # `$(...)` and backticks are expanded by bash (even inside double quotes),
   # so the guard cannot know the final target. Single quotes keep them literal,
@@ -1583,9 +1600,16 @@ check_single_command() {
   # (not just at the start). This catches both separated forms (`> file`,
   # `2>> file`) and attached forms (`>file`, `x>file`, `"a">file`).
   # Skips fd-to-fd redirects like 2>&1 (target starts with &).
-  local ri=0 rn=${#CMD_TOKENS[@]}
+  #
+  # Iterate the heredoc-blanked token stream so a quoted-heredoc body
+  # mentioning "> /etc/foo" is not mistaken for a real redirect. Real
+  # redirects sit OUTSIDE any heredoc body and survive the blanking
+  # pass; an unquoted heredoc opener like `cat > /etc/x <<EOF ...EOF`
+  # still has the `>` and `/etc/x` in the command-context portion that
+  # is not blanked, so it stays caught.
+  local ri=0 rn=${#CMD_TOKENS_SCAN[@]}
   while [ $ri -lt $rn ]; do
-    local rtok="${CMD_TOKENS[$ri]}"
+    local rtok="${CMD_TOKENS_SCAN[$ri]}"
     local REDIR_TARGET=""
 
     # Scan the token for an unquoted > (respecting ' and " quotes and
@@ -1637,7 +1661,7 @@ check_single_command() {
     local rest="${rtok:$op_end}"
     if [ -z "$rest" ]; then
       if [ $((ri + 1)) -lt $rn ]; then
-        REDIR_TARGET="${CMD_TOKENS[$((ri + 1))]}"
+        REDIR_TARGET="${CMD_TOKENS_SCAN[$((ri + 1))]}"
         ri=$((ri + 2))
       else
         ri=$((ri + 1))
@@ -1692,9 +1716,11 @@ check_single_command() {
   # GNU `sed -i`, BSD `sed -i ''`, and `sed -iSUFFIX` all rewrite the file(s)
   # passed as positional args. The non-in-place form is read-only and is left
   # alone. We only engage when -i / --in-place is actually present.
-  if echo "$CMD" | grep -qE '(^|[[:space:]])sed($|[[:space:]])'; then
+  # Use the heredoc-blanked view here: a commit-message body that
+  # mentions "sed -i" must not be parsed as a real sed call.
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])sed($|[[:space:]])'; then
     local sed_has_i=0
-    for raw_tok in "${CMD_TOKENS[@]}"; do
+    for raw_tok in "${CMD_TOKENS_SCAN[@]}"; do
       local tok
       tok=$(strip_quotes "$raw_tok")
       if [[ "$tok" == -i* ]] || [[ "$tok" == --in-place* ]]; then
@@ -1716,10 +1742,10 @@ check_single_command() {
       #   - if no -e/-f seen: skip the first positional (it's SCRIPT)
       #   - every remaining positional is a FILE → is_write_permitted
       local has_explicit_script=0
-      local pi=1 pn=${#CMD_TOKENS[@]}
+      local pi=1 pn=${#CMD_TOKENS_SCAN[@]}
       while [ $pi -lt $pn ]; do
         local ptok
-        ptok=$(strip_quotes "${CMD_TOKENS[$pi]}")
+        ptok=$(strip_quotes "${CMD_TOKENS_SCAN[$pi]}")
         case "$ptok" in
           -e|-f|--expression|--file)
             has_explicit_script=1; pi=$((pi + 2)); continue ;;
@@ -1731,10 +1757,10 @@ check_single_command() {
 
       local script_skipped=0
       local sed_seen_dashdash=0
-      local si=1 sn=${#CMD_TOKENS[@]}
+      local si=1 sn=${#CMD_TOKENS_SCAN[@]}
       while [ $si -lt $sn ]; do
         local stok
-        stok=$(strip_quotes "${CMD_TOKENS[$si]}")
+        stok=$(strip_quotes "${CMD_TOKENS_SCAN[$si]}")
         # POSIX `--` ends option parsing — every token after this is a
         # positional operand even if it starts with `-`. Without this, a
         # file operand named `-owned` was silently skipped as an
@@ -1772,12 +1798,14 @@ check_single_command() {
   fi
 
   # --- truncate: always rewrites the target file(s) ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])truncate($|[[:space:]])'; then
-    local tri=1 trn=${#CMD_TOKENS[@]}
+  # Heredoc-blanked view as above — body bytes mentioning "truncate" are
+  # not a real call.
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])truncate($|[[:space:]])'; then
+    local tri=1 trn=${#CMD_TOKENS_SCAN[@]}
     local trunc_seen_dashdash=0
     while [ $tri -lt $trn ]; do
       local trtok
-      trtok=$(strip_quotes "${CMD_TOKENS[$tri]}")
+      trtok=$(strip_quotes "${CMD_TOKENS_SCAN[$tri]}")
       # POSIX `--` ends option parsing — every token after this is a
       # positional file operand even if it starts with `-`. Same fix as
       # the sed -i walker above (Copilot review on PR #12).
