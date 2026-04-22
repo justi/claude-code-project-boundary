@@ -313,3 +313,58 @@ expect_blocked "FN: nice < /tmp/x bash (redirect after wrapper)" \
   "nice < /tmp/x bash"
 
 echo ""
+
+# ----------------------------------------------------------------------
+# Quoted-heredoc body parsed by file/redirect detectors as if it were
+# a real command. Same root cause class as the two FPs already fixed
+# in v1.4.1 (positional/$VAR detector, shell-stdin detector): a
+# detector that walks CMD or CMD_TOKENS without a heredoc-aware view
+# picks up body bytes as if they were live tokens.
+#
+# Triggered repeatedly during the v1.5.0 audit when commit-message
+# bodies happened to contain example commands. Real attacks are
+# unaffected because the interpreter / target token sits OUTSIDE any
+# heredoc body in genuine attacks; the fix only blanks body bytes.
+# ----------------------------------------------------------------------
+echo "--- quoted heredoc body parsed by file/redirect detectors (FP) ---"
+
+expect_allowed "git commit -F - body mentions sed -i with outside path" \
+  "git commit -F - <<'EOF'
+example: sed -i 's/a/b/' /etc/foo
+EOF"
+
+expect_allowed "git commit -F - body mentions truncate with outside path" \
+  "git commit -F - <<'EOF'
+example: truncate -s 0 /etc/log
+EOF"
+
+expect_allowed "git commit -F - body mentions redirect to /bin/owned" \
+  "git commit -F - <<'EOF'
+collapsing > /bin/owned should not bypass guard
+EOF"
+
+expect_allowed "cat > PROJECT/file <<'EOF' body has redirect example" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+note: writing > /etc/passwd is forbidden
+EOF"
+
+echo ""
+
+# Regression: real attacks of the same shape must STAY BLOCKED.
+echo "--- file/redirect attacks (must stay BLOCKED — regression for FP fix above) ---"
+
+expect_blocked "FN: real sed -i targets /etc (no heredoc)" \
+  "cd /tmp && sed -i 's/a/b/' /etc/passwd_test"
+
+expect_blocked "FN: real truncate targets /etc (no heredoc)" \
+  "cd /tmp && truncate -s 0 /etc/passwd_test"
+
+expect_blocked "FN: real redirect to /bin/owned (no heredoc)" \
+  "echo x > /bin/owned"
+
+expect_blocked "FN: real redirect inside unquoted heredoc opener" \
+  "cat > /etc/passwd_test <<EOF
+content
+EOF"
+
+echo ""
