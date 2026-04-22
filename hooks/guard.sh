@@ -1710,10 +1710,13 @@ check_single_command() {
           tri=$((tri + 2)); continue ;;
         -*|'') tri=$((tri + 1)); continue ;;
       esac
-      # Skip a size literal stuck to -s, e.g. `-s0` after flag pre-trim
-      if [[ "$trtok" =~ ^[+=\<\>\%]?[0-9] ]]; then
-        tri=$((tri + 1)); continue
-      fi
+      # No bare size-literal skip here: GNU truncate requires size to
+      # travel with -s/--size — either separately (consumed by the flag
+      # case above, +2) or attached as `-sN` / `--size=N` (caught by the
+      # `-*` case). Any remaining non-option token is a FILE operand.
+      # The previous `^[+=<>%]?[0-9]` skip wrongly dropped digit-leading
+      # filenames like `123.log` or `2024-04-22.log`, letting the target
+      # escape the boundary check (Codex round — P2 bypass).
       local trexp
       trexp=$(expand_path "$trtok")
       if [[ "$trexp" != /* ]]; then
