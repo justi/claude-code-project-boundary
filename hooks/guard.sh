@@ -380,38 +380,41 @@ is_inside_project() {
 # boundary exception.
 is_write_permitted() {
   local resolved="$1"
-  if is_inside_project "$resolved"; then
+
+  # Dereference leaf symlinks BEFORE the inside-project check. Without
+  # this, a symlink that lives inside the project but points outside
+  # is treated as in-project and every write-style Bash detector
+  # (tee, sed -i, truncate, curl -o, wget -O, dd of=) that funnels
+  # through this function lets the write land at the outside target.
+  # The Edit/Write tool branch already derefs upstream; this brings
+  # the Bash-side paths to parity (Copilot review on PR #12 / 7641a412).
+  # Loop limit + post-loop check fail-closed on circular chains.
+  local deref="$resolved"
+  local depth=20
+  while [[ -L "$deref" && $depth -gt 0 ]]; do
+    local link_target
+    link_target=$(readlink "$deref")
+    if [[ "$link_target" == /* ]]; then
+      deref=$(resolve_path "$link_target")
+    else
+      deref=$(resolve_path "$(dirname "$deref")/$link_target")
+    fi
+    depth=$((depth - 1))
+  done
+  if [[ -L "$deref" ]]; then
+    return 1
+  fi
+
+  if is_inside_project "$deref"; then
     return 0
   fi
-  if is_allowlisted "$resolved"; then
-    # Defense-in-depth: if the allowlisted path is (or contains) a symlink,
-    # follow it and require the ultimate target to also be permitted.
-    # Otherwise the allowlist becomes a symlink-pivot bypass:
-    #   ln -sf /etc/passwd memory/link && tee memory/link
-    # would write to /etc/passwd because `memory/link` matches the pattern.
-    local deref="$resolved"
-    local depth=20
-    while [[ -L "$deref" && $depth -gt 0 ]]; do
-      local link_target
-      link_target=$(readlink "$deref")
-      if [[ "$link_target" == /* ]]; then
-        deref=$(resolve_path "$link_target")
-      else
-        deref=$(resolve_path "$(dirname "$deref")/$link_target")
-      fi
-      depth=$((depth - 1))
-    done
-    # Fail-closed on circular / too-deep symlink chains.
-    if [[ -L "$deref" ]]; then
-      return 1
-    fi
-    if is_inside_project "$deref"; then
-      return 0
-    fi
-    if is_allowlisted "$deref"; then
-      return 0
-    fi
-    return 1
+  if is_allowlisted "$deref"; then
+    # Allowlisted paths previously needed their own deref pass to avoid
+    # `ln -sf /etc/passwd memory/link && tee memory/link`. Now that the
+    # entry deref above already canonicalised the leaf, the allowlist
+    # check sees the ultimate OS-level path — same protection, no
+    # second loop needed.
+    return 0
   fi
   return 1
 }
