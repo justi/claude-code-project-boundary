@@ -1802,8 +1802,25 @@ split_and_check() {
   local len=${#full_cmd}
   local ch prev_ch=""
 
+  # Use a heredoc-blanked copy to detect operator positions. Quoted
+  # heredoc bodies (`<<'EOF'` / `<<"EOF"` / `<<\EOF`) get spaces in
+  # `scan_cmd` (byte offsets preserved), so `&&` / `||` / `;` / `|`
+  # inside such bodies are NOT treated as command separators. Without
+  # this, a body line like `X=/etc/x && rm $X` would split into two
+  # pseudo-commands; the second (`rm $X\nEOF`) loses heredoc context
+  # and the $VAR detector false-positives.
+  local scan_cmd
+  scan_cmd=$(blank_quoted_heredoc_bodies "$full_cmd")
+  # Defensive: if helper returned a different length (it should not),
+  # fall back to scanning full_cmd directly to preserve original
+  # semantics.
+  if [ ${#scan_cmd} -ne $len ]; then
+    scan_cmd="$full_cmd"
+  fi
+
   while [ $i -lt $len ]; do
-    ch="${full_cmd:$i:1}"
+    ch="${scan_cmd:$i:1}"
+    local raw_ch="${full_cmd:$i:1}"
 
     # Handle quotes
     if [ "$ch" = "'" ] && [ $in_double_quote -eq 0 ]; then
@@ -1812,7 +1829,7 @@ split_and_check() {
       else
         in_single_quote=0
       fi
-      current="${current}${ch}"
+      current="${current}${raw_ch}"
       prev_ch="$ch"
       i=$((i + 1))
       continue
@@ -1824,7 +1841,7 @@ split_and_check() {
       else
         in_double_quote=0
       fi
-      current="${current}${ch}"
+      current="${current}${raw_ch}"
       prev_ch="$ch"
       i=$((i + 1))
       continue
@@ -1834,7 +1851,7 @@ split_and_check() {
     if [ $in_single_quote -eq 0 ] && [ $in_double_quote -eq 0 ]; then
       # Check for && or ||
       if [ $i -lt $((len - 1)) ]; then
-        local two_char="${full_cmd:$i:2}"
+        local two_char="${scan_cmd:$i:2}"
         if [ "$two_char" = "&&" ] || [ "$two_char" = "||" ]; then
           subcmds+=("$current")
           current=""
@@ -1859,7 +1876,7 @@ split_and_check() {
         local trimmed="${current%"${current##*[![:space:]]}"}"
         if [[ "$trimmed" == *\> ]]; then
           # Part of >| or >>| — keep it as a redirect operator, not a pipe
-          current="${current}${ch}"
+          current="${current}${raw_ch}"
           prev_ch="$ch"
           i=$((i + 1))
           continue
@@ -1872,7 +1889,7 @@ split_and_check() {
       fi
     fi
 
-    current="${current}${ch}"
+    current="${current}${raw_ch}"
     prev_ch="$ch"
     i=$((i + 1))
   done
