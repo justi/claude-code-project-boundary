@@ -1,1 +1,7 @@
-[project-boundary active] Guard blocks command substitution `$(...)` (fail-closed, uninspectable). For multiline text in Bash commands (e.g. git commit messages): DON'T use `git commit -m "$(cat <<EOF...)"`. DO use `git commit -F - <<'EOF' ... EOF` (heredoc on stdin) or Write the message to a file then `git commit -F <file>`. Same applies to any `$(cat <<...)` pattern — replace with stdin-redirect or temp file.
+[project-boundary] Guard blocks `$(...)` (fail-closed, uninspectable). For git commit with multiline body, ALWAYS use stdin heredoc:
+  git commit -F - <<'EOF'
+  <title>
+
+  <body>
+  EOF
+Do NOT: `git commit -m "$(cat <<EOF)"` (blocked), write to `.git/COMMIT_*` temp files (triggers Write prompt), write to `/tmp/*_msg.txt` (outside-project blocked). The stdin heredoc is the ONE supported path.
