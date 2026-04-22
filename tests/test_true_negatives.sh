@@ -263,3 +263,53 @@ true || rm \$X
 EOF"
 
 echo ""
+
+# ----------------------------------------------------------------------
+# Quoted-heredoc body containing a shell-token WORD (bash/sh/source)
+# must not false-positive on the stdin-redirect-feeds-shell detector.
+#
+# Root cause: that detector tokenizes the entire CMD (including
+# heredoc body bytes), sets _saw_redir=1 on the opening `<<`, then
+# fires on any later token that matches is_shell_token / is_source_token
+# — even when that token is plain prose inside a quoted body that bash
+# never executes. Surfaced when writing a git-commit message body that
+# mentions the word "bash".
+#
+# Regression coverage for the genuine shell-stdin attacks (must stay
+# BLOCKED) lives in test_bash_guard.sh / test_bypass_reproducers.sh —
+# the fix below preserves them by tokenizing a heredoc-blanked copy of
+# the CMD only for this scan.
+# ----------------------------------------------------------------------
+echo "--- quoted heredoc body with shell-token words (must not false-positive) ---"
+
+expect_allowed "git commit -F - <<'EOF' body mentions 'bash'" \
+  "git commit -F - <<'EOF'
+fix bash heredoc parsing
+EOF"
+
+expect_allowed "cat > PROJECT/file <<'EOF' body mentions 'sh'" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+some sh notes
+EOF"
+
+expect_allowed "git commit -F - <<'EOF' body mentions 'source'" \
+  "git commit -F - <<'EOF'
+note about source code
+EOF"
+
+echo ""
+
+# Regression: the genuine shell-stdin attacks must STAY BLOCKED. These
+# are the FN cases the fix above must not weaken.
+echo "--- shell-stdin attacks (must stay BLOCKED — regression for FP fix above) ---"
+
+expect_blocked "FN: < /tmp/x bash (leading redirect feeds shell)" \
+  "< /tmp/x bash"
+
+expect_blocked "FN: FOO=1 < /tmp/x bash (redirect after VAR=val)" \
+  "FOO=1 < /tmp/x bash"
+
+expect_blocked "FN: nice < /tmp/x bash (redirect after wrapper)" \
+  "nice < /tmp/x bash"
+
+echo ""
