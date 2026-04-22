@@ -159,6 +159,59 @@ expect_allowed 'source PROJECT/venv/bin/activate (relative allowed inside)' \
 expect_allowed '. PROJECT/utils.sh' \
   ". $PROJECT/utils.sh"
 
+# Positive cases for the sed -i script recognizer.
+# Codex finding: the script-skip heuristic only matched s///-style
+# substitutions and numeric addresses, so any OTHER valid sed program
+# (address-pattern delete, BSD -i '' extension, transliteration, block)
+# was treated as a file path and wrongly blocked. Real in-project
+# edits use those forms all the time.
+echo ""
+echo "--- sed -i non-substitute scripts in project (must not false-positive) ---"
+
+expect_allowed "sed -i '/debug/d' PROJECT/file (delete by pattern)" \
+  "sed -i '/debug/d' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i '/foo/p' PROJECT/file (print by pattern)" \
+  "sed -i '/foo/p' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i 'y/abc/xyz/' PROJECT/file (transliterate)" \
+  "sed -i 'y/abc/xyz/' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i '' '/foo/d' PROJECT/file (BSD empty extension)" \
+  "sed -i '' '/foo/d' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i.bak '/foo/d' PROJECT/file (attached extension)" \
+  "sed -i.bak '/foo/d' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i -e '/foo/d' PROJECT/file (-e explicit expression)" \
+  "sed -i -e '/foo/d' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i 's/a/b/' PROJECT/file (classic substitute still OK)" \
+  "sed -i 's/a/b/' $PROJECT/tests/scratch.txt"
+
+# Regressions: sed -i targeting outside the project must STILL be blocked.
+echo ""
+echo "--- sed -i outside project (regressions must stay blocked) ---"
+# These are block-expected — use a conditional wrapper.
+_sed_block() {
+  local label="$1" cmd="$2"
+  TOTAL=$((TOTAL + 1))
+  run_guard "$cmd"
+  local rc=$?
+  if [ "$rc" -eq 2 ]; then echo "PASS: $label"; PASS=$((PASS + 1))
+  else echo "FAIL: $label -- expected BLOCKED got $rc"; FAIL=$((FAIL + 1)); fi
+}
+_sed_block "sed -i '/foo/d' /etc/passwd_test (outside, pattern-delete)" \
+  "sed -i '/foo/d' /etc/passwd_test"
+_sed_block "sed -i '' '/foo/d' /etc/passwd_test (BSD, outside)" \
+  "sed -i '' '/foo/d' /etc/passwd_test"
+_sed_block "sed -i -e '/foo/d' /etc/passwd_test (-e, outside)" \
+  "sed -i -e '/foo/d' /etc/passwd_test"
+_sed_block "sed -i 's/a/b/' /etc/passwd_test (substitute, outside — already worked)" \
+  "sed -i 's/a/b/' /etc/passwd_test"
+
+echo ""
+echo '--- $VAR / positional-parameter positive cases ---'
 # Positive cases for the broadened $VAR / positional-parameter detector.
 # Must allow literal dollar-delimited forms that are NOT parameter
 # expansion: ANSI-C quoting ($'...'), i18n strings ($"..."), arithmetic
