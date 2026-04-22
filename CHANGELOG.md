@@ -5,6 +5,25 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.1] — 2026-04-23
+
+### Fixed — false positives (file walkers + redirect-target scanner)
+
+- **File walkers and redirect scanner parsed heredoc body bytes** — same root cause class as the two FPs already fixed in v1.4.1. Three more body-blind detectors (`sed -i` walker, `truncate` walker, redirect-target scanner) walked `CMD_TOKENS` directly. A `git commit -F - <<'EOF' ... EOF` body that happened to mention an example command like `sed -i 's/a/b/' /etc/foo`, `truncate -s 0 /etc/log`, or `> /bin/owned` was parsed as if it were a real call, and the commit was refused with an outside-project block. Repeatedly hit during the v1.5.0 audit cycle while writing the audit's own commit messages.
+
+### Implementation — symmetric fix shape, completed
+
+Built a parallel token stream `CMD_TOKENS_SCAN` from a heredoc-blanked copy of the command (via the existing `blank_quoted_heredoc_bodies` helper, which preserves byte offsets so tokenization stays aligned). Routed all three remaining body-blind detectors through it: entry greps use `CMD_BLANKED`, all walks use `CMD_TOKENS_SCAN`. After this release, every body-walking detector goes through a heredoc-aware view — completing the symmetric fix started in v1.4.1.
+
+### Tests
+
+- `tests/test_true_negatives.sh` — 4 positive cases (commit body mentioning `sed -i`, `truncate`, `> /bin/owned`, and a redirect inside a quoted heredoc body); 4 regression cases for the corresponding genuine attacks (real outside-path edits, real redirects, unquoted heredoc opener with outside target) — all must stay BLOCKED.
+- Full suite: **551 passed / 0 failed.**
+
+### Notes
+
+- No new bypass categories. No API changes. SemVer patch bump from 1.5.0.
+
 ## [1.5.0] — 2026-04-22
 
 ### Security — closes 3 bypass categories from Copilot review on PR #12
