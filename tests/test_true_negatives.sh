@@ -368,3 +368,44 @@ content
 EOF"
 
 echo ""
+
+# ----------------------------------------------------------------------
+# Backslash-escaped heredoc delimiter (<<\EOF) regression. Bash treats
+# <<\EOF identically to <<'EOF' — body is opaque, no expansions. But
+# CMD normalization strips `\` before a letter (the alias-escape fix:
+# `\rm` → `rm`), which silently turns `<<\EOF` into `<<EOF` (unquoted).
+# Then blank_quoted_heredoc_bodies sees an unquoted heredoc and does
+# NOT blank the body, so the downstream sed-i / truncate / redirect /
+# $VAR detectors all parse body bytes again — every FP closed in
+# v1.4.1 / v1.5.1 reappears for the backslash-escaped form.
+#
+# Reported by Copilot review on PR #12 (commit 7641a412).
+# Fix: build the blanked scan view from CMD_RAW (preserving the
+# backslash-escaped delimiter) rather than from the post-normalisation
+# CMD. The other normalisation passes are then applied to the blanked
+# view — backslash-stripping is safe at that point because body bytes
+# are already replaced with spaces.
+# ----------------------------------------------------------------------
+echo "--- backslash-escaped heredoc body (must not false-positive) ---"
+
+expect_allowed "git commit -F - <<\\EOF body mentions sed -i /etc/foo" \
+  'git commit -F - <<\EOF
+example: sed -i '"'"'s/a/b/'"'"' /etc/foo
+EOF'
+
+expect_allowed "cat <<\\EOF body has redirect example" \
+  'cat <<\EOF
+note: > /etc/passwd would be bad
+EOF'
+
+expect_allowed "git commit -F - <<\\EOF body mentions \$1" \
+  'git commit -F - <<\EOF
+parameter $1 should not fire
+EOF'
+
+expect_allowed "cat > PROJECT/file <<-\\EOF (indented backslash form)" \
+  "cat > $PROJECT/tests/scratch.txt <<-\\EOF
+	example: rm \$X
+	EOF"
+
+echo ""
