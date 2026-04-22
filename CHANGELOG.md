@@ -5,6 +5,23 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] — 2026-04-23
+
+### Security — closes 3 bypass categories from Codex review on commit e01df86
+
+- **A. Path-prefix strip on operands (not just command-name)** — the v1.5.0 narrowing of the `/bin/` strip matched "command position OR after a non-redirect, non-pipe, non-separator character". The second clause looked only at the immediately preceding character, which for ordinary operands is just the trailing letter of the previous token. So `rm /bin/sh`, `tee /bin/owned`, `mv x /sbin/owned`, `curl -o /bin/owned`, `ln -sf x /usr/local/bin/owned` all had their outside-system path rewritten to a bare leaf which then resolved into `EFFECTIVE_CWD/leaf` — passing the boundary while bash itself hit the original system path. Replaced the second sed pass with `strip_command_name_prefix`, a tokenize-aware helper that walks past sudo/env/nice/nohup/time/stdbuf/ionice/chrt/taskset/command/builtin/exec, VAR=val assignments, flags, and `timeout`'s numeric duration, then strips the prefix from the next "real" token only. Operand and redirect-target tokens are preserved verbatim. Wrapper combinations (`nice /bin/rm`, `timeout 5 /bin/rm`, `env /bin/rm`, `env FOO=bar /bin/rm`, `nohup /bin/curl -o`) all stay BLOCKED with regression coverage.
+- **B. Heredoc-delimiter parser stops at hyphen / dot** — the blanking helper parsed the heredoc delimiter using `[A-Za-z0-9_]`, which rejects characters that bash itself allows in a word. For backslash-escaped or unquoted delimiters containing a hyphen / dot / etc. (`<<\EOF-1`, `<<EOF.1`, `<<-\TAG-X`), the parser captured only the leading run, never matched the real terminator, and overblanked the rest of CMD — including any LIVE command that bash would actually execute after the real terminator. Widened the char class to `[A-Za-z0-9_.+:=,/@%^-]` so the parser walks the same characters bash treats as a word. Quoted forms (`<<'TAG'`, `<<"TAG"`) were unaffected.
+- **C. Newline as command separator ignored by `split_and_check`** — bash treats a newline outside quotes as a command terminator equivalent to `;`, but the splitter only recognised `&&`, `||`, `;`, `|`. A multi-line command like `echo ok\nbash /tmp/evil.sh` reached every "first-token" detector as a single subcommand named `echo`, hiding the script-execute on the second line. Added newline to the operator set. Two helper changes preserve the body-aware FP coverage from v1.4.1 / v1.5.1 / v1.6.0: (1) `blank_quoted_heredoc_bodies` grew an optional `blank_newlines` argument that also blanks newlines inside quoted-heredoc bodies; (2) in that mode, the body range extends one byte backward to subsume the newline that ENDS the heredoc opener line — that newline is syntactic line-terminator for the opener, not a command separator and not a body byte either. `split_and_check` passes `blank_newlines`; every other call site keeps the default preserve mode so byte offsets used by the expansion-detector stay aligned with their line-based scanner.
+
+### Tests
+
+- `tests/test_bypass_reproducers.sh` — 6 reproducers for A (operand strip across rm/tee/mv/ln/curl/sed paths), 3 for B (backslash + hyphen, redirect after such heredoc, indented backslash + hyphen), 3 for C (script-execute on second line, source on second line, `/bin/bash` on second line). 11 positive cases covering legitimate command-position prefix use, benign hyphenated delimiter, ordinary multi-line in-project sequences, quoted-heredoc bodies with newlines, and 5 wrapper + `/bin/<cmd>` regression cases.
+- Full suite: **589 passed / 0 failed.**
+
+### Notes
+
+- All three findings come from Codex review on commit e01df86. Each closure follows the project TDD flow: failing reproducer commit first, then fix commit. Codex's POC for B included an additional `cat <<\EOF-1\nbody\nEOF-1\nrm /bin/sh` that combines B and A; the chained POC stays BLOCKED after this release.
+
 ## [1.6.0] — 2026-04-23
 
 ### Security — closes write-through-inside-project-symlink bypass (Copilot review on PR #12)
