@@ -5,6 +5,28 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] — 2026-04-23
+
+### Security — closes write-through-inside-project-symlink bypass (Copilot review on PR #12)
+
+- **`is_write_permitted` returned true for inside-project symlinks pointing outside** — the function checked `is_inside_project` on the lexical path with no leaf dereference. Every Bash-side write detector (`tee`, `sed -i`, `truncate`, `curl -o`, `wget -O`, `dd of=`) called `is_write_permitted` directly, so a symlink that lived inside the project but pointed outside was treated as in-project and the write landed at the outside target. Concrete shape: create an inside-project symlink to `/etc/passwd_test`, then any of the six tools writing to that symlink ended up writing to `/etc/passwd_test`.
+- **Fix**: moved the leaf-dereference loop to the top of `is_write_permitted` (single source of truth). The inside-project and allowlist checks now both operate on the canonicalised OS-level path. The Edit/Write tool branch already derefed upstream; this brings Bash-side paths to parity. Fail-closed on circular / too-deep chains preserved (depth-20 cap, post-loop `-L` check). Allowlist branch's previously-needed inner deref loop is now redundant and removed.
+
+### Fixed — false positive (backslash-escaped heredoc delimiter)
+
+- **`<<\EOF` body bytes leaked into file/redirect detectors** — the alias-escape pass that strips `\` before any letter (so `\rm` → `rm`) also turned `<<\EOF` into `<<EOF`, downgrading a backslash-escaped (= quoted) heredoc delimiter to its unquoted twin. `blank_quoted_heredoc_bodies` then saw an unquoted heredoc and refused to blank the body, so the file/redirect walkers parsed body bytes as live commands. Every false positive closed in v1.4.1 / v1.5.1 reappeared for the backslash-escaped form.
+- **Fix**: build `CMD_BLANKED` from `CMD_RAW` (before normalisation), then re-apply the normalisation passes on the blanked view. Body bytes are spaces by the time the alias-escape strip runs, so it cannot leak through them; live command-line forms (`\rm`, subshell parens, `/bin/` prefixes) are still recognised by downstream detectors. Brings the file/redirect scan view to parity with `CMD_EXPAND_SCAN`, which has been correctly sourced from `CMD_RAW` since v1.4.1.
+
+### Tests
+
+- `tests/test_bypass_reproducers.sh` — 6 reproducers for the symlink-write bypass (one per affected tool), 2 positive cases (regular in-project file, symlink resolving to in-project target).
+- `tests/test_true_negatives.sh` — 4 positive cases for backslash-escaped heredoc bodies (commit message mentioning `sed -i`, `> /etc/passwd`, `$1`, indented `<<-\EOF`).
+- Full suite: **565 passed / 0 failed.**
+
+### Notes
+
+- All findings from Copilot review on commit 7641a412. Each closure follows the project TDD flow: failing reproducer commit first, then fix commit.
+
 ## [1.5.1] — 2026-04-23
 
 ### Fixed — false positives (file walkers + redirect-target scanner)
