@@ -735,17 +735,33 @@ check_single_command() {
     CMD_TOKENS+=("$tok")
   done < <(tokenize_args "$CMD")
 
-  # Parallel token stream built from a heredoc-blanked copy of CMD.
-  # Used by detectors that walk tokens looking for a marker word
-  # (sed, truncate, ">"-redirect operator) and would otherwise pick up
-  # heredoc body bytes as if they were live commands. A commit-message
-  # body that happens to mention "sed -i /etc/foo" or "> /bin/owned"
-  # must NOT be parsed as a real sed/redirect call — bash never
-  # executes a single byte of a quoted heredoc body. Real attacks are
-  # unaffected because the marker tokens sit OUTSIDE any heredoc body
-  # and survive the blanking pass.
+  # Parallel token stream built from a heredoc-blanked copy of the
+  # command. Used by detectors that walk tokens looking for a marker
+  # word (sed, truncate, ">"-redirect operator) and would otherwise
+  # pick up heredoc body bytes as if they were live commands.
+  #
+  # Source MUST be CMD_RAW, not CMD: the alias-escape pass that strips
+  # `\` before a letter (so `\rm` → `rm`) also turns `<<\EOF` into
+  # `<<EOF` — i.e. silently downgrades a backslash-escaped (= quoted)
+  # heredoc delimiter to its unquoted twin. blank_quoted_heredoc_bodies
+  # would then see an unquoted heredoc and refuse to blank the body,
+  # re-leaking body bytes into every downstream walker. Blanking BEFORE
+  # the alias-escape strip preserves the heredoc-quoting semantics that
+  # bash itself uses.
+  #
+  # The remaining normalisation passes are then re-applied on the
+  # blanked view so that `\rm`, subshell parens, and `/bin/` prefixes
+  # in the live command-line are still recognised by detectors. Body
+  # bytes are already spaces by this point, so the alias-escape strip
+  # cannot leak through them.
   local CMD_BLANKED
-  CMD_BLANKED=$(blank_quoted_heredoc_bodies "$CMD")
+  CMD_BLANKED=$(blank_quoted_heredoc_bodies "$CMD_RAW")
+  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
+  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/(^|[[:space:]])\(+/\1/g; s/\)+($|[[:space:]])/\1/g')"
+  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/\\([a-zA-Z_])/\1/g')"
+  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's#^/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/##')"
+  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's#([^<>|&;[:space:]])[[:space:]]+/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/#\1 #g')"
+  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
   local -a CMD_TOKENS_SCAN=()
   while IFS= read -r tok; do
     [[ -z "$tok" ]] && continue
