@@ -555,3 +555,64 @@ with body line
 EOF"
 
 echo ""
+
+# ============================================================
+# 16. Heredoc delimiter parser stops at non-[A-Za-z0-9_] char
+# ------------------------------------------------------------
+# blank_quoted_heredoc_bodies parses the heredoc delimiter using the
+# char class [A-Za-z0-9_], which excludes characters that bash itself
+# allows in a word (the heredoc delimiter is just a word). For a real
+# heredoc opener like `<<\EOF-1` (or `<<EOF.1`, `<<EOF+1`, `<<-EOF-1`)
+# the parser captures only the leading [A-Za-z0-9_] run and treats
+# the delim as `EOF` while the actual terminator on the body line is
+# `EOF-1`. The terminator is never matched, so the helper falls into
+# the "heredoc still open at EOF" branch and blanks everything from
+# the body start through the end of the CMD — including any LIVE
+# command that bash would actually execute after the real terminator.
+#
+# Concrete bypass:
+#   cat > PROJECT/file <<\EOF-1
+#   body
+#   EOF-1
+#   sed -i 's/a/b/' /etc/passwd_test
+# The outside-project sed call after `EOF-1` is hidden from the
+# guard's file-walker (because the file/redirect detectors consume
+# CMD_BLANKED, which is now all-blank from the body onwards) and
+# allowed to run.
+# Reported by Codex review on commit e01df86.
+# ============================================================
+echo "--- 16. heredoc delimiter parser stops at hyphen / dot ---"
+
+expect_blocked "<<\\EOF-1 body then sed -i to /etc" \
+  "cat > $PROJECT/tests/scratch.txt <<\\EOF-1
+body
+EOF-1
+sed -i 's/a/b/' /etc/passwd_test"
+
+expect_blocked "<<\\EOF-1 body then redirect to /etc" \
+  "cat > $PROJECT/tests/scratch.txt <<\\EOF-1
+body
+EOF-1
+echo x > /etc/passwd_test"
+
+expect_blocked "<<EOF.1 (dot in delim) body then truncate to /etc" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF.1'
+body
+EOF.1
+truncate -s 0 /etc/passwd_test"
+
+expect_blocked "<<-\\TAG-X (indented backslash + hyphen) body then sed" \
+  "cat > $PROJECT/tests/scratch.txt <<-\\TAG-X
+	body
+	TAG-X
+sed -i 's/a/b/' /etc/passwd_test"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - benign use of hyphenated delimiter
+expect_allowed "<<\\EOF-1 with in-project commands" \
+  "cat > $PROJECT/tests/scratch.txt <<\\EOF-1
+body
+EOF-1
+echo done"
+
+echo ""
