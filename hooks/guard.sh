@@ -1664,23 +1664,47 @@ check_single_command() {
       fi
     done
     if [ "$sed_has_i" -eq 1 ]; then
-      # Positional arguments after flags: the script (first non-flag) and the
-      # file(s) (rest). We validate every non-flag, non-option-value token;
-      # false positives on the script arg are fine because an expression like
-      # `s/x/y/` resolves inside the project and passes anyway.
+      # Positional tracking (replaces the old regex-based script heuristic,
+      # which blocked legitimate programs like `/pat/d`, `/pat/p`, `y/…/…/`
+      # because they start with `/` or other path-like bytes and looked
+      # like absolute paths to the validator).
+      #
+      # sed grammar with -i:
+      #   sed [options] [-e script]... [-f script-file]... [SCRIPT] FILE...
+      # The positional SCRIPT exists only when NO -e/-f was supplied. When
+      # -e/-f is present, every positional is a FILE. Pre-scan the token
+      # stream to learn which regime applies, then walk positionals:
+      #   - if no -e/-f seen: skip the first positional (it's SCRIPT)
+      #   - every remaining positional is a FILE → is_write_permitted
+      local has_explicit_script=0
+      local pi=1 pn=${#CMD_TOKENS[@]}
+      while [ $pi -lt $pn ]; do
+        local ptok
+        ptok=$(strip_quotes "${CMD_TOKENS[$pi]}")
+        case "$ptok" in
+          -e|-f|--expression|--file)
+            has_explicit_script=1; pi=$((pi + 2)); continue ;;
+          --expression=*|--file=*)
+            has_explicit_script=1; pi=$((pi + 1)); continue ;;
+        esac
+        pi=$((pi + 1))
+      done
+
+      local script_skipped=0
       local si=1 sn=${#CMD_TOKENS[@]}
       while [ $si -lt $sn ]; do
         local stok
         stok=$(strip_quotes "${CMD_TOKENS[$si]}")
-        # Skip -e / -f / --expression= value tokens
+        # Consume flag+value pairs and bare flags (incl. BSD's empty `''`
+        # backup-extension argument that follows a bare `-i`).
         case "$stok" in
           -e|-f|--expression|--file)
             si=$((si + 2)); continue ;;
           -*|'') si=$((si + 1)); continue ;;
         esac
-        # The sed script is typically s/…/…/ — skip anything that does not
-        # look like a path.
-        if [[ "$stok" =~ ^s[/|,].*[/|,] ]] || [[ "$stok" =~ ^[0-9] ]]; then
+        # First positional is SCRIPT only when no -e/-f was supplied.
+        if [ "$has_explicit_script" -eq 0 ] && [ "$script_skipped" -eq 0 ]; then
+          script_skipped=1
           si=$((si + 1)); continue
         fi
         local sexp
