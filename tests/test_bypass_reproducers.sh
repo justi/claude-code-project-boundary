@@ -389,3 +389,45 @@ expect_allowed "sed -i 's/a/b/' PROJECT/tests/file (no --, normal call)" \
   "sed -i 's/a/b/' $PROJECT/tests/file"
 
 echo ""
+
+# ============================================================
+# 13. php -r / --run / -R inline code execution
+# ------------------------------------------------------------
+# The non-shell-interpreter detector covers python/perl/ruby/node/php
+# inline-code flags via the regex `-[a-zA-Z]*[ceE]|--eval|--execute`.
+# The comment for that block explicitly lists `php` as covered, but
+# PHP's actual inline-code flags are `-r`, `-R`, and `--run` — none
+# of which match the regex. So `php -r 'system("rm /etc/x")'` reaches
+# the parser unchecked.
+#
+# `-r` cannot be added to the shared regex without false-positives:
+# `ruby -r library` and `node -r module` use `-r` to PRELOAD a module,
+# not to execute inline code. Hence a dedicated PHP-only check.
+# Reported by Copilot review on PR #12.
+# ============================================================
+echo "--- 13. php inline-code flags (-r / -R / --run) ---"
+
+expect_blocked "php -r 'system(\"...\")' (inline code execution)" \
+  "php -r 'system(\"echo pwned\")'"
+
+expect_blocked "php --run inline code" \
+  "php --run 'echo 1;'"
+
+expect_blocked "php -R 'code' (per-line inline code)" \
+  "php -R 'echo \$argn;'"
+
+expect_blocked "php with attached -r form: php -rcode" \
+  "php -r'system(\"x\")'"
+
+# Positive cases — preload-style -r in other interpreters must NOT
+# regress (ruby -r lib, node -r mod load a module, no code exec).
+expect_allowed "ruby -r somelib PROJECT/script.rb (preload module)" \
+  "ruby -r json $PROJECT/CHANGELOG.md"
+
+expect_allowed "node -r module PROJECT/script.js (preload module)" \
+  "node -r dotenv $PROJECT/CHANGELOG.md"
+
+expect_allowed "php PROJECT/script.php (no inline-code flag)" \
+  "php $PROJECT/CHANGELOG.md"
+
+echo ""
