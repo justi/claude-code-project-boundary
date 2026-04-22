@@ -943,6 +943,16 @@ check_single_command() {
     echo "BLOCKED: Non-shell interpreter with inline code flag cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
   fi
+  # Dedicated PHP rule — `-r`, `-R`, `--run` execute inline code. Cannot
+  # be added to the shared regex above because `-r` is a module-preload
+  # flag in ruby/node (no code execution), so a generic `r` letter would
+  # false-positive on `ruby -r json` / `node -r dotenv`. The matcher
+  # accepts attached forms (`-rcode`, `-Rcode`) and the long alias.
+  # Reported by Copilot review on PR #12.
+  if echo "$CMD" | grep -qE '(^|[[:space:]])php[[:space:]]+(-[a-zA-Z]*[rR]|--run)([[:space:]]|=|$|'\''|")'; then
+    echo "BLOCKED: 'php -r/-R/--run' inline code cannot be safely inspected. Ask user for explicit permission." >&2
+    exit 2
+  fi
   if echo "$CMD" | grep -qE '(^|[[:space:]])(g?awk|mawk|nawk)([[:space:]]|$)'; then
     if echo "$CMD" | grep -qE 'system[[:space:]]*\(|\|[[:space:]]*&?[[:space:]]*"?(sh|bash)'; then
       echo "BLOCKED: awk program with 'system()' / shell pipe cannot be safely inspected. Ask user for explicit permission." >&2
