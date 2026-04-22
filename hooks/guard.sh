@@ -1720,17 +1720,26 @@ check_single_command() {
       done
 
       local script_skipped=0
+      local sed_seen_dashdash=0
       local si=1 sn=${#CMD_TOKENS[@]}
       while [ $si -lt $sn ]; do
         local stok
         stok=$(strip_quotes "${CMD_TOKENS[$si]}")
-        # Consume flag+value pairs and bare flags (incl. BSD's empty `''`
-        # backup-extension argument that follows a bare `-i`).
-        case "$stok" in
-          -e|-f|--expression|--file)
-            si=$((si + 2)); continue ;;
-          -*|'') si=$((si + 1)); continue ;;
-        esac
+        # POSIX `--` ends option parsing — every token after this is a
+        # positional operand even if it starts with `-`. Without this, a
+        # file operand named `-owned` was silently skipped as an
+        # unknown flag (Copilot review on PR #12).
+        if [ $sed_seen_dashdash -eq 0 ]; then
+          # Consume flag+value pairs and bare flags (incl. BSD's empty `''`
+          # backup-extension argument that follows a bare `-i`).
+          case "$stok" in
+            --)
+              sed_seen_dashdash=1; si=$((si + 1)); continue ;;
+            -e|-f|--expression|--file)
+              si=$((si + 2)); continue ;;
+            -*|'') si=$((si + 1)); continue ;;
+          esac
+        fi
         # First positional is SCRIPT only when no -e/-f was supplied.
         if [ "$has_explicit_script" -eq 0 ] && [ "$script_skipped" -eq 0 ]; then
           script_skipped=1
@@ -1755,14 +1764,22 @@ check_single_command() {
   # --- truncate: always rewrites the target file(s) ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])truncate($|[[:space:]])'; then
     local tri=1 trn=${#CMD_TOKENS[@]}
+    local trunc_seen_dashdash=0
     while [ $tri -lt $trn ]; do
       local trtok
       trtok=$(strip_quotes "${CMD_TOKENS[$tri]}")
-      case "$trtok" in
-        -s|--size|-r|--reference|-o|--io-blocks)
-          tri=$((tri + 2)); continue ;;
-        -*|'') tri=$((tri + 1)); continue ;;
-      esac
+      # POSIX `--` ends option parsing — every token after this is a
+      # positional file operand even if it starts with `-`. Same fix as
+      # the sed -i walker above (Copilot review on PR #12).
+      if [ $trunc_seen_dashdash -eq 0 ]; then
+        case "$trtok" in
+          --)
+            trunc_seen_dashdash=1; tri=$((tri + 1)); continue ;;
+          -s|--size|-r|--reference|-o|--io-blocks)
+            tri=$((tri + 2)); continue ;;
+          -*|'') tri=$((tri + 1)); continue ;;
+        esac
+      fi
       # No bare size-literal skip here: GNU truncate requires size to
       # travel with -s/--size — either separately (consumed by the flag
       # case above, +2) or attached as `-sN` / `--size=N` (caught by the

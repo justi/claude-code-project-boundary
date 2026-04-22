@@ -367,14 +367,14 @@ echo "--- 12. -- end-of-options ignored by sed/truncate parsers ---"
 expect_blocked "sed -i with -- and dash-prefix file in /tmp cwd" \
   "cd /tmp && sed -i 's/a/b/' -- -owned"
 
-expect_blocked "sed -i with -- and absolute outside path that starts with -" \
-  "sed -i 's/a/b/' -- -owned"
-
 expect_blocked "truncate with -- and dash-prefix file in /tmp cwd" \
   "cd /tmp && truncate -s 0 -- -owned"
 
-expect_blocked "truncate with -- and absolute outside path that starts with -" \
-  "truncate -s 0 -- -owned"
+# Note on -- with a relative dash-prefix file (no `cd`):
+# `-owned` resolves to EFFECTIVE_CWD/-owned. With EFFECTIVE_CWD inside
+# the project, that's an in-project write — not a bypass. The bypass
+# only manifests when cwd is moved outside (the two `cd /tmp` cases
+# above) or when the operand is an absolute outside path.
 
 # Positive cases that must remain ALLOWED after the fix:
 # - operand after -- inside the project boundary
