@@ -229,3 +229,37 @@ expect_allowed "literal \$ inside single quotes" \
   "echo 'cost: \$1' > $PROJECT/tests/scratch.txt"
 
 echo ""
+
+# ----------------------------------------------------------------------
+# Quoted-heredoc body containing && / ; / || must not false-positive on
+# $VAR or positional-parameter detectors.
+#
+# Root cause: split_and_check splits the full CMD on &&/||/; without
+# heredoc awareness. A body line like `X=/etc/x && rm $X` becomes two
+# pseudo-commands; the second (`rm $X\nBODY`) loses heredoc context and
+# the $VAR detector fires even though bash never expands a quoted
+# heredoc body.
+# ----------------------------------------------------------------------
+echo "--- quoted heredoc body with shell operators (must not false-positive) ---"
+
+expect_allowed "gh pr edit --body-file - <<'BODY' with && in body" \
+  "gh pr edit 12 --body-file - <<'BODY'
+- Variable indirection: X=/etc/x && rm \$X
+BODY"
+
+expect_allowed "cat > PROJECT/file <<'EOF' with && and \$1 in body" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+echo a && rm \$1
+EOF"
+
+expect_allowed "cat > PROJECT/file <<'EOF' with ; and \$@ in body" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+foo; echo \$@
+EOF"
+
+expect_allowed "cat > PROJECT/file <<'EOF' with || and \$X in body" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+true || rm \$X
+EOF"
+
+echo ""
