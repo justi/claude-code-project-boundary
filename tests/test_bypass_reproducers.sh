@@ -271,3 +271,44 @@ expect_blocked "rm \$- (shell flags)" \
   'rm $-'
 
 echo ""
+
+# ============================================================
+# 10. truncate: digit-leading filename skipped as if it were a size
+# ------------------------------------------------------------
+# The truncate guard walks argv and tries to skip size literals using a
+# regex like `^[+=\<\>\%]?[0-9]`. That regex also matches a filename
+# whose basename starts with a digit, so after `-s 0` has already been
+# consumed as (flag, value), the next digit-leading token — the actual
+# file operand — is also skipped. No path check fires and the write
+# is accepted while bash mutates the outside file at exec time.
+#
+# Concretely, from a /tmp cwd:
+#   truncate -s 0 123.log
+# is allowed and zeroes /tmp/123.log even though /tmp is outside the
+# project. Same failure shape applies to any size-suffix filename
+# (1.txt, 2024-04-22.log, etc.) when invoked from an outside cwd.
+# ============================================================
+echo "--- 10. truncate digit-leading filename ---"
+
+expect_blocked "truncate -s 0 123.log in /tmp cwd (digit-leading filename)" \
+  "cd /tmp && truncate -s 0 123.log"
+
+expect_blocked "truncate -s 0 2024-04-22.log in /tmp cwd" \
+  "cd /tmp && truncate -s 0 2024-04-22.log"
+
+expect_blocked "truncate -s 0 /etc/9owned (absolute digit-leading)" \
+  "truncate -s 0 /etc/9owned"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - in-project digit-leading filename
+# - size value passed as space-separated -s operand (not the file)
+expect_allowed "truncate -s 0 PROJECT/tests/1.log (in-project, digit-leading)" \
+  "truncate -s 0 $PROJECT/tests/1.log"
+
+expect_allowed "truncate -s 100 PROJECT/tests/file.log (size then file)" \
+  "truncate -s 100 $PROJECT/tests/file.log"
+
+expect_allowed "truncate -s0 PROJECT/tests/file.log (attached -s0)" \
+  "truncate -s0 $PROJECT/tests/file.log"
+
+echo ""
