@@ -616,3 +616,55 @@ EOF-1
 echo done"
 
 echo ""
+
+# ============================================================
+# 17. /bin path-prefix stripped from operands, not just command-name
+# ------------------------------------------------------------
+# CMD normalization strips /bin/, /sbin/, /usr/bin/, /usr/sbin/,
+# /usr/local/bin/ so that `/bin/rm` is recognised as `rm` by command
+# name detectors. The v1.5.0 fix narrowed the strip to "command
+# position OR after a non-redirect, non-pipe, non-separator
+# character", but the second clause still matches operands whose
+# preceding character is a regular alphanumeric — i.e. ALL ordinary
+# operands. So `rm /bin/sh`, `tee /bin/owned`, `curl -o /bin/owned`,
+# `mv x /sbin/owned` all see their outside-system path operand
+# rewritten to a relative bare name (sh / owned / etc.), which then
+# resolves to `EFFECTIVE_CWD/sh` and passes the boundary check.
+# Bash, of course, still hits the original system path.
+# Reported by Codex review on commit e01df86.
+# ============================================================
+echo "--- 17. /bin prefix stripped from path operands ---"
+
+expect_blocked "rm /bin/sh (operand has /bin prefix)" \
+  "rm /bin/sh"
+
+expect_blocked "rm /usr/bin/foo" \
+  "rm /usr/bin/foo"
+
+expect_blocked "tee /bin/owned (write target with /bin prefix)" \
+  "tee /bin/owned"
+
+expect_blocked "curl -o /bin/owned (download target outside)" \
+  "curl -o /bin/owned http://example.com"
+
+expect_blocked "mv PROJECT/x /sbin/owned (mv target stripped)" \
+  "mv $PROJECT/CHANGELOG.md /sbin/owned"
+
+expect_blocked "ln -sf foo /usr/local/bin/owned (ln target stripped)" \
+  "ln -sf $PROJECT/CHANGELOG.md /usr/local/bin/owned"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - /bin/<command> in command position must still be recognised
+#   (this was the original purpose of the normalisation)
+# - in-project command line that mentions /bin/ as part of an
+#   ordinary literal string after `echo`
+expect_allowed "/bin/cat PROJECT/file (command position)" \
+  "/bin/cat $PROJECT/CHANGELOG.md"
+
+expect_allowed "/usr/bin/echo hello (command position)" \
+  "/usr/bin/echo hello"
+
+expect_allowed "echo /bin/sh (literal arg, no write tool)" \
+  "echo /bin/sh"
+
+echo ""
