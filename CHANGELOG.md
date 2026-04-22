@@ -5,6 +5,23 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] — 2026-04-22
+
+### Security — closes 3 bypass categories from Copilot review on PR #12
+
+- **Path-prefix normalization corrupted redirect targets (C1)** — `check_single_command` strips common binary path prefixes (`/bin/`, `/usr/bin/`, `/sbin/`, `/usr/sbin/`, `/usr/local/bin/`) so that `/bin/rm` is recognised as `rm` by command-name detectors. The single regex `(^|whitespace)/(bin|...)/` matched the whitespace AFTER a redirect operator too, so `echo x > /bin/owned` was rewritten to `echo x > owned`, the redirect target collapsed to a relative inside-project path, and the boundary check passed — while the parser physically wrote outside the project. Split into two passes that match only at command position: `^/(bin|...)/` (start of CMD) and `[^<>|&;[:space:]]\s+/(bin|...)/` (after a non-redirect, non-pipe, non-separator character). Subcommand separators are already split off by `split_and_check`, so a `/bin/foo` appearing here is unambiguous: command-position (stripped) or argument/redirect target (preserved).
+- **End-of-options ignored by `sed -i` and `truncate` walkers (C2 + C3)** — both file-walkers treated any token starting with `-` as an option and skipped it. POSIX `--` ends option parsing: every token after it is a positional operand even when its name begins with `-`. So `cd /tmp && sed -i 's/a/b/' -- -owned` (and the truncate analogue) silently skipped `-owned` as an unknown flag, never reaching `is_write_permitted`. Each walker now carries a `seen_dashdash` flag; once set, the option-dispatch case is bypassed and every remaining token is validated as a file operand. Same fix shape in two detectors.
+- **PHP inline-code flag bypass (C4)** — the non-shell-interpreter detector lists `php` in its command-name alternation, but the flag pattern `-[a-zA-Z]*[ceE]|--eval|--execute` matches none of php's actual inline-code flags (`-r`, `-R`, `--run`). So `php -r 'system("rm /etc/x")'` reached the parser unchecked despite the block comment claiming php was covered. Added a dedicated php-only check matching `(-[a-zA-Z]*[rR]|--run)` followed by whitespace, `=`, end-of-string, or a quote. Cannot fold into the shared regex because `-r` is a module-preload flag in ruby and node — generic `r` would false-positive on `ruby -r json` / `node -r dotenv`.
+
+### Tests
+
+- `tests/test_bypass_reproducers.sh` — 3 new categories (4 + 2 + 4 reproducers), plus 8 positive cases protecting legitimate command-position path prefixes, sentinel use with in-project operands, and module-preload flags in ruby/node.
+- Full suite: **543 passed / 0 failed.**
+
+### Notes
+
+- All three findings originally surfaced in Copilot review on PR #12. Each closure follows the project's TDD flow: failing reproducer first, then patch, with positive cases against regression.
+
 ## [1.4.1] — 2026-04-22
 
 ### Fixed — false positives
