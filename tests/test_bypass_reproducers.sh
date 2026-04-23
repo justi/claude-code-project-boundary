@@ -894,3 +894,67 @@ unquoted body with plain text
 EOF"
 
 echo ""
+
+# ============================================================
+# 21. Quoted command-name bypass — `"rm" /etc/x`, `'rm' /etc/x`
+# ------------------------------------------------------------
+# bash strips surrounding quotes from a command word at exec time,
+# so `"rm" /etc/passwd` actually invokes the `rm` binary. Every
+# destructive-command detector in guard.sh matches bare command
+# names via regexes like `(^|[[:space:]])rm($|[[:space:]])` on the
+# normalized CMD string. The normalization chain strips subshell
+# parens and alias-escape backslashes but does NOT strip
+# surrounding quotes, so a quoted command-name token keeps its
+# quotes in CMD and the regex misses the match entirely.
+#
+# Affects every bare-name detector: rm, mv, cp, ln, chmod, chown,
+# tee, curl, wget, find, sed, truncate, rsync — wrapping the
+# command-name in single or double quotes (or a combination with
+# absolute paths and wrappers) slips the whole class past the
+# guard.
+#
+# Reported by Copilot review on commit 22112ba (guard.sh:1078,1503).
+# ============================================================
+echo "--- 21. quoted command-name bypass ---"
+
+expect_blocked '"rm" /etc/passwd_test (double-quoted rm)' \
+  '"rm" /etc/passwd_test'
+
+expect_blocked "'rm' /etc/passwd_test (single-quoted rm)" \
+  "'rm' /etc/passwd_test"
+
+expect_blocked '"tee" /etc/passwd_test (quoted tee target)' \
+  '"tee" /etc/passwd_test'
+
+expect_blocked '"/bin/rm" /etc/passwd_test (quoted absolute path)' \
+  '"/bin/rm" /etc/passwd_test'
+
+expect_blocked 'nice "rm" /etc/passwd_test (wrapper + quoted cmd)' \
+  'nice "rm" /etc/passwd_test'
+
+expect_blocked 'sudo "rm" /etc/passwd_test' \
+  'sudo "rm" /etc/passwd_test'
+
+expect_blocked '"sed" -i to /usr/bin/owned (quoted sed)' \
+  '"sed" -i "s/a/b/" /usr/bin/owned'
+
+expect_blocked '"truncate" -s 0 /usr/bin/owned (quoted truncate)' \
+  '"truncate" -s 0 /usr/bin/owned'
+
+expect_blocked 'env FOO=bar "rm" /etc/passwd_test (env VAR + quoted cmd)' \
+  'env FOO=bar "rm" /etc/passwd_test'
+
+# Positive cases that must remain ALLOWED after the fix:
+# - quoted read-only command inside project
+# - quoted destructive command targeting in-project path
+# - command-name literal inside a string argument (not a command)
+expect_allowed '"ls" PROJECT (quoted ls inside project)' \
+  "\"ls\" $PROJECT"
+
+expect_allowed '"rm" PROJECT/file (quoted rm, in-project target)' \
+  "\"rm\" $PROJECT/tests/scratch.txt"
+
+expect_allowed "echo 'rm /etc/x' (rm inside a string literal, no exec)" \
+  "echo 'rm /etc/x'"
+
+echo ""
