@@ -132,3 +132,434 @@ expect_allowed 'dd raw write inside project' \
   "dd if=/dev/urandom of=\"$PROJECT/dir with space/random.bin\" bs=1M count=1"
 
 echo ""
+
+echo "--- executing scripts inside project must still work ---"
+
+expect_allowed 'bash ./tests/test_guard.sh (relative inside project)' \
+  "bash ./tests/test_guard.sh"
+
+expect_allowed 'bash PROJECT/script.sh (absolute inside project)' \
+  "bash $PROJECT/script.sh"
+
+expect_allowed 'sh PROJECT/script.sh' \
+  "sh $PROJECT/script.sh"
+
+expect_allowed 'zsh PROJECT/script.sh' \
+  "zsh $PROJECT/script.sh"
+
+expect_allowed 'bash -x PROJECT/script.sh (with flag)' \
+  "bash -x $PROJECT/script.sh"
+
+# Known limitation: `bash -- PROJECT/script.sh` is false-positively blocked
+# by the older piping-to-shell heuristic (predates this PR). Rare in practice.
+
+expect_allowed 'source PROJECT/venv/bin/activate (relative allowed inside)' \
+  "source $PROJECT/venv/bin/activate"
+
+expect_allowed '. PROJECT/utils.sh' \
+  ". $PROJECT/utils.sh"
+
+# Positive cases for the sed -i script recognizer.
+# Codex finding: the script-skip heuristic only matched s///-style
+# substitutions and numeric addresses, so any OTHER valid sed program
+# (address-pattern delete, BSD -i '' extension, transliteration, block)
+# was treated as a file path and wrongly blocked. Real in-project
+# edits use those forms all the time.
+echo ""
+echo "--- sed -i non-substitute scripts in project (must not false-positive) ---"
+
+expect_allowed "sed -i '/debug/d' PROJECT/file (delete by pattern)" \
+  "sed -i '/debug/d' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i '/foo/p' PROJECT/file (print by pattern)" \
+  "sed -i '/foo/p' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i 'y/abc/xyz/' PROJECT/file (transliterate)" \
+  "sed -i 'y/abc/xyz/' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i '' '/foo/d' PROJECT/file (BSD empty extension)" \
+  "sed -i '' '/foo/d' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i.bak '/foo/d' PROJECT/file (attached extension)" \
+  "sed -i.bak '/foo/d' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i -e '/foo/d' PROJECT/file (-e explicit expression)" \
+  "sed -i -e '/foo/d' $PROJECT/tests/scratch.txt"
+
+expect_allowed "sed -i 's/a/b/' PROJECT/file (classic substitute still OK)" \
+  "sed -i 's/a/b/' $PROJECT/tests/scratch.txt"
+
+# Regressions: sed -i targeting outside the project must STILL be blocked.
+echo ""
+echo "--- sed -i outside project (regressions must stay blocked) ---"
+# These are block-expected — use a conditional wrapper.
+_sed_block() {
+  local label="$1" cmd="$2"
+  TOTAL=$((TOTAL + 1))
+  run_guard "$cmd"
+  local rc=$?
+  if [ "$rc" -eq 2 ]; then echo "PASS: $label"; PASS=$((PASS + 1))
+  else echo "FAIL: $label -- expected BLOCKED got $rc"; FAIL=$((FAIL + 1)); fi
+}
+_sed_block "sed -i '/foo/d' /etc/passwd_test (outside, pattern-delete)" \
+  "sed -i '/foo/d' /etc/passwd_test"
+_sed_block "sed -i '' '/foo/d' /etc/passwd_test (BSD, outside)" \
+  "sed -i '' '/foo/d' /etc/passwd_test"
+_sed_block "sed -i -e '/foo/d' /etc/passwd_test (-e, outside)" \
+  "sed -i -e '/foo/d' /etc/passwd_test"
+_sed_block "sed -i 's/a/b/' /etc/passwd_test (substitute, outside — already worked)" \
+  "sed -i 's/a/b/' /etc/passwd_test"
+
+echo ""
+echo '--- $VAR / positional-parameter positive cases ---'
+# Positive cases for the broadened $VAR / positional-parameter detector.
+# Must allow literal dollar-delimited forms that are NOT parameter
+# expansion: ANSI-C quoting ($'...'), i18n strings ($"..."), arithmetic
+# $((...)), a literal `$` inside single quotes, and $HOME itself.
+expect_allowed "printf with ANSI-C quoted literal \$'\\n'" \
+  "printf 'hi'\$'\\n' > $PROJECT/tests/scratch.txt"
+
+expect_allowed "echo i18n string \$\"Hello\"" \
+  "echo \$\"Hello\" > $PROJECT/tests/scratch.txt"
+
+expect_allowed "arithmetic \$((1+2)) in redirect" \
+  "echo \$((1+2)) > $PROJECT/tests/scratch.txt"
+
+expect_allowed "literal \$ inside single quotes" \
+  "echo 'cost: \$1' > $PROJECT/tests/scratch.txt"
+
+echo ""
+
+# ----------------------------------------------------------------------
+# Quoted-heredoc body containing && / ; / || must not false-positive on
+# $VAR or positional-parameter detectors.
+#
+# Root cause: split_and_check splits the full CMD on &&/||/; without
+# heredoc awareness. A body line like `X=/etc/x && rm $X` becomes two
+# pseudo-commands; the second (`rm $X\nBODY`) loses heredoc context and
+# the $VAR detector fires even though bash never expands a quoted
+# heredoc body.
+# ----------------------------------------------------------------------
+echo "--- quoted heredoc body with shell operators (must not false-positive) ---"
+
+expect_allowed "gh pr edit --body-file - <<'BODY' with && in body" \
+  "gh pr edit 12 --body-file - <<'BODY'
+- Variable indirection: X=/etc/x && rm \$X
+BODY"
+
+expect_allowed "cat > PROJECT/file <<'EOF' with && and \$1 in body" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+echo a && rm \$1
+EOF"
+
+expect_allowed "cat > PROJECT/file <<'EOF' with ; and \$@ in body" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+foo; echo \$@
+EOF"
+
+expect_allowed "cat > PROJECT/file <<'EOF' with || and \$X in body" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+true || rm \$X
+EOF"
+
+echo ""
+
+# ----------------------------------------------------------------------
+# Quoted-heredoc body containing a shell-token WORD (bash/sh/source)
+# must not false-positive on the stdin-redirect-feeds-shell detector.
+#
+# Root cause: that detector tokenizes the entire CMD (including
+# heredoc body bytes), sets _saw_redir=1 on the opening `<<`, then
+# fires on any later token that matches is_shell_token / is_source_token
+# — even when that token is plain prose inside a quoted body that bash
+# never executes. Surfaced when writing a git-commit message body that
+# mentions the word "bash".
+#
+# Regression coverage for the genuine shell-stdin attacks (must stay
+# BLOCKED) lives in test_bash_guard.sh / test_bypass_reproducers.sh —
+# the fix below preserves them by tokenizing a heredoc-blanked copy of
+# the CMD only for this scan.
+# ----------------------------------------------------------------------
+echo "--- quoted heredoc body with shell-token words (must not false-positive) ---"
+
+expect_allowed "git commit -F - <<'EOF' body mentions 'bash'" \
+  "git commit -F - <<'EOF'
+fix bash heredoc parsing
+EOF"
+
+expect_allowed "cat > PROJECT/file <<'EOF' body mentions 'sh'" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+some sh notes
+EOF"
+
+expect_allowed "git commit -F - <<'EOF' body mentions 'source'" \
+  "git commit -F - <<'EOF'
+note about source code
+EOF"
+
+echo ""
+
+# Regression: the genuine shell-stdin attacks must STAY BLOCKED. These
+# are the FN cases the fix above must not weaken.
+echo "--- shell-stdin attacks (must stay BLOCKED — regression for FP fix above) ---"
+
+expect_blocked "FN: < /tmp/x bash (leading redirect feeds shell)" \
+  "< /tmp/x bash"
+
+expect_blocked "FN: FOO=1 < /tmp/x bash (redirect after VAR=val)" \
+  "FOO=1 < /tmp/x bash"
+
+expect_blocked "FN: nice < /tmp/x bash (redirect after wrapper)" \
+  "nice < /tmp/x bash"
+
+echo ""
+
+# ----------------------------------------------------------------------
+# Quoted-heredoc body parsed by file/redirect detectors as if it were
+# a real command. Same root cause class as the two FPs already fixed
+# in v1.4.1 (positional/$VAR detector, shell-stdin detector): a
+# detector that walks CMD or CMD_TOKENS without a heredoc-aware view
+# picks up body bytes as if they were live tokens.
+#
+# Triggered repeatedly during the v1.5.0 audit when commit-message
+# bodies happened to contain example commands. Real attacks are
+# unaffected because the interpreter / target token sits OUTSIDE any
+# heredoc body in genuine attacks; the fix only blanks body bytes.
+# ----------------------------------------------------------------------
+echo "--- quoted heredoc body parsed by file/redirect detectors (FP) ---"
+
+expect_allowed "git commit -F - body mentions sed -i with outside path" \
+  "git commit -F - <<'EOF'
+example: sed -i 's/a/b/' /etc/foo
+EOF"
+
+expect_allowed "git commit -F - body mentions truncate with outside path" \
+  "git commit -F - <<'EOF'
+example: truncate -s 0 /etc/log
+EOF"
+
+expect_allowed "git commit -F - body mentions redirect to /bin/owned" \
+  "git commit -F - <<'EOF'
+collapsing > /bin/owned should not bypass guard
+EOF"
+
+expect_allowed "cat > PROJECT/file <<'EOF' body has redirect example" \
+  "cat > $PROJECT/tests/scratch.txt <<'EOF'
+note: writing > /etc/passwd is forbidden
+EOF"
+
+echo ""
+
+# Regression: real attacks of the same shape must STAY BLOCKED.
+echo "--- file/redirect attacks (must stay BLOCKED — regression for FP fix above) ---"
+
+expect_blocked "FN: real sed -i targets /etc (no heredoc)" \
+  "cd /tmp && sed -i 's/a/b/' /etc/passwd_test"
+
+expect_blocked "FN: real truncate targets /etc (no heredoc)" \
+  "cd /tmp && truncate -s 0 /etc/passwd_test"
+
+expect_blocked "FN: real redirect to /bin/owned (no heredoc)" \
+  "echo x > /bin/owned"
+
+expect_blocked "FN: real redirect inside unquoted heredoc opener" \
+  "cat > /etc/passwd_test <<EOF
+content
+EOF"
+
+echo ""
+
+# ----------------------------------------------------------------------
+# Backslash-escaped heredoc delimiter (<<\EOF) regression. Bash treats
+# <<\EOF identically to <<'EOF' — body is opaque, no expansions. But
+# CMD normalization strips `\` before a letter (the alias-escape fix:
+# `\rm` → `rm`), which silently turns `<<\EOF` into `<<EOF` (unquoted).
+# Then blank_quoted_heredoc_bodies sees an unquoted heredoc and does
+# NOT blank the body, so the downstream sed-i / truncate / redirect /
+# $VAR detectors all parse body bytes again — every FP closed in
+# v1.4.1 / v1.5.1 reappears for the backslash-escaped form.
+#
+# Reported by Copilot review on PR #12 (commit 7641a412).
+# Fix: build the blanked scan view from CMD_RAW (preserving the
+# backslash-escaped delimiter) rather than from the post-normalisation
+# CMD. The other normalisation passes are then applied to the blanked
+# view — backslash-stripping is safe at that point because body bytes
+# are already replaced with spaces.
+# ----------------------------------------------------------------------
+echo "--- backslash-escaped heredoc body (must not false-positive) ---"
+
+expect_allowed "git commit -F - <<\\EOF body mentions sed -i /etc/foo" \
+  'git commit -F - <<\EOF
+example: sed -i '"'"'s/a/b/'"'"' /etc/foo
+EOF'
+
+expect_allowed "cat <<\\EOF body has redirect example" \
+  'cat <<\EOF
+note: > /etc/passwd would be bad
+EOF'
+
+expect_allowed "git commit -F - <<\\EOF body mentions \$1" \
+  'git commit -F - <<\EOF
+parameter $1 should not fire
+EOF'
+
+expect_allowed "cat > PROJECT/file <<-\\EOF (indented backslash form)" \
+  "cat > $PROJECT/tests/scratch.txt <<-\\EOF
+	example: rm \$X
+	EOF"
+
+echo ""
+
+# ============================================================
+# Common Claude workflows — must stay allowed
+# ------------------------------------------------------------
+# Day-to-day commands Claude issues across Ruby / Python / Node / PHP /
+# Go / git / build / test / package-manager workflows. These are
+# legitimate inside-project operations or read-only queries that must
+# never be false-positively blocked by any tightening of the guard.
+# Patterns distilled from real assistant sessions + CLAUDE.md hints
+# (hook discipline, test-before-advise rule, TDD flow).
+# ============================================================
+echo "--- common Claude workflows (git / pkg mgr / test / lint / run) ---"
+
+# --- git: the bread-and-butter. Read-only / in-project mutations. ---
+expect_allowed "git status"           "git status"
+expect_allowed "git status -uall"     "git status -uall"
+expect_allowed "git diff"             "git diff"
+expect_allowed "git diff --staged"    "git diff --staged"
+expect_allowed "git log --oneline -5" "git log --oneline -5"
+expect_allowed "git log main..HEAD"   "git log main..HEAD"
+expect_allowed "git show HEAD"        "git show HEAD"
+expect_allowed "git blame guard.sh"   "git blame $PROJECT/hooks/guard.sh"
+expect_allowed "git branch"           "git branch"
+expect_allowed "git branch -a"        "git branch -a"
+expect_allowed "git rev-parse HEAD"   "git rev-parse HEAD"
+expect_allowed "git rev-parse --short HEAD" "git rev-parse --short HEAD"
+expect_allowed "git add PROJECT/file" "git add $PROJECT/README.md"
+expect_allowed "git stash list"       "git stash list"
+expect_allowed "git remote -v"        "git remote -v"
+expect_allowed "git fetch origin"     "git fetch origin"
+
+# --- gh CLI: PR / issue / release operations on remote, read mostly. ---
+expect_allowed "gh pr view 12"                  "gh pr view 12"
+expect_allowed "gh pr list"                     "gh pr list"
+expect_allowed "gh release list"                "gh release list"
+expect_allowed "gh api /repos/o/r/pulls/1"      "gh api /repos/o/r/pulls/1"
+
+# --- package managers: install/update inside project. ---
+expect_allowed "npm install"          "npm install"
+expect_allowed "npm ci"               "npm ci"
+expect_allowed "npm run build"        "npm run build"
+expect_allowed "npm test"             "npm test"
+expect_allowed "yarn install"         "yarn install"
+expect_allowed "pnpm install"         "pnpm install"
+expect_allowed "bundle install"       "bundle install"
+expect_allowed "bundle exec rspec"    "bundle exec rspec"
+expect_allowed "bundle exec rubocop"  "bundle exec rubocop"
+expect_allowed "pip install -r requirements.txt" "pip install -r $PROJECT/requirements.txt"
+expect_allowed "poetry install"       "poetry install"
+expect_allowed "uv sync"              "uv sync"
+expect_allowed "cargo build"          "cargo build"
+expect_allowed "cargo test"           "cargo test"
+expect_allowed "go build ./..."       "go build ./..."
+expect_allowed "go test ./..."        "go test ./..."
+expect_allowed "mix deps.get"         "mix deps.get"
+expect_allowed "composer install"     "composer install"
+
+# --- test runners: fine-grained invocations that MUST pass. ---
+expect_allowed "rspec spec/foo_spec.rb"        "rspec $PROJECT/spec/foo_spec.rb"
+expect_allowed "pytest tests/"                 "pytest $PROJECT/tests/"
+expect_allowed "pytest -k pattern"             "pytest -k 'sed or truncate'"
+expect_allowed "jest --watch"                  "jest --watch"
+expect_allowed "vitest run"                    "vitest run"
+expect_allowed "bash tests/test_guard.sh"      "bash $PROJECT/tests/test_guard.sh"
+
+# --- language runtimes without inline-code flags: safe ---
+expect_allowed "ruby script.rb"                 "ruby $PROJECT/script.rb"
+expect_allowed "ruby -v"                        "ruby -v"
+expect_allowed "ruby --version"                 "ruby --version"
+expect_allowed "python script.py"               "python $PROJECT/script.py"
+expect_allowed "python3 -V"                     "python3 -V"
+expect_allowed "python -m pytest"               "python -m pytest"
+expect_allowed "python -m venv .venv"           "python -m venv $PROJECT/.venv"
+expect_allowed "node script.js"                 "node $PROJECT/script.js"
+expect_allowed "node --version"                 "node --version"
+expect_allowed "deno run script.ts"             "deno run $PROJECT/script.ts"
+expect_allowed "bun run script.ts"              "bun run $PROJECT/script.ts"
+expect_allowed "perl -v"                        "perl -v"
+expect_allowed "perl script.pl"                 "perl $PROJECT/script.pl"
+expect_allowed "php -v"                         "php -v"
+expect_allowed "php -l file.php"                "php -l $PROJECT/file.php"
+expect_allowed "php script.php"                 "php $PROJECT/script.php"
+
+# --- linters / formatters: read or rewrite in-project files. ---
+expect_allowed "eslint src/"                    "eslint $PROJECT/src/"
+expect_allowed "prettier --write src/"          "prettier --write $PROJECT/src/"
+expect_allowed "black ."                        "black $PROJECT/"
+expect_allowed "ruff check"                     "ruff check"
+expect_allowed "shellcheck hooks/guard.sh"      "shellcheck $PROJECT/hooks/guard.sh"
+
+# --- sed/awk without destructive flags: read-only projections. ---
+expect_allowed "sed -n print range"             "sed -n '10,20p' $PROJECT/README.md"
+expect_allowed "sed pipeline (no -i)"           "cat $PROJECT/README.md | sed 's/old/new/'"
+expect_allowed "awk projection"                 "awk '{print \$1}' $PROJECT/README.md"
+expect_allowed "awk -F delimiter"               "awk -F: '{print \$1}' $PROJECT/README.md"
+
+# --- CLAUDE.md hint: heredoc commit flow must pass (never block) ---
+expect_allowed "git commit -F - heredoc"        "git commit -F - <<'EOF'
+title
+
+body with details
+EOF"
+
+# --- misc safe: env/version probes, file listing, basic queries ---
+expect_allowed "env"                            "env"
+expect_allowed "pwd"                            "pwd"
+expect_allowed "whoami"                         "whoami"
+expect_allowed "date"                           "date"
+expect_allowed "ls PROJECT"                     "ls $PROJECT"
+expect_allowed "ls -la PROJECT/hooks"           "ls -la $PROJECT/hooks"
+expect_allowed "cat PROJECT/README.md"          "cat $PROJECT/README.md"
+expect_allowed "head -20 PROJECT/CHANGELOG.md"  "head -20 $PROJECT/CHANGELOG.md"
+expect_allowed "tail -f PROJECT/log.txt"        "tail -f $PROJECT/log.txt"
+expect_allowed "wc -l PROJECT/guard.sh"         "wc -l $PROJECT/hooks/guard.sh"
+expect_allowed "grep pattern PROJECT/file"      "grep pattern $PROJECT/README.md"
+
+echo ""
+
+# ============================================================
+# <<\EOF backslash-escaped heredoc delimiter: sed/truncate/redirect
+# walkers must NOT false-positive on body bytes.
+# ------------------------------------------------------------
+# Copilot review on commit aa6409b flagged a theoretical concern that
+# the alias-escape strip (`\rm` -> `rm`) would also rewrite `<<\EOF`
+# to `<<EOF` and break blank_quoted_heredoc_bodies for the CMD_BLANKED
+# view. The guard avoids this by deriving CMD_BLANKED from CMD_RAW
+# (pre-normalization), not from the alias-stripped CMD (guard.sh:848,
+# documented at 833-840). These positives lock in that behavior for
+# the specific detectors Copilot named.
+# ============================================================
+echo "--- <<\\EOF body must not trigger sed/truncate/redirect walkers ---"
+
+expect_allowed 'sed -i mention in <<\EOF body (literal, not a live sed)' \
+  "cat > $PROJECT/tests/scratch.txt <<\\EOF
+sed -i 's/x/y/' /etc/passwd
+EOF"
+
+expect_allowed 'truncate mention in <<\EOF body (literal text)' \
+  "cat > $PROJECT/tests/scratch.txt <<\\EOF
+truncate -s 0 /etc/passwd
+EOF"
+
+expect_allowed 'redirect > mention in <<\EOF body (literal text)' \
+  "cat > $PROJECT/tests/scratch.txt <<\\EOF
+echo hi > /etc/passwd
+EOF"
+
+# Indented form <<-\EOF follows the same bash semantics.
+expect_allowed 'sed -i mention in <<-\EOF body (indented backslash form)' \
+  "cat > $PROJECT/tests/scratch.txt <<-\\EOF
+	sed -i 's/x/y/' /etc/passwd
+	EOF"
+
+echo ""
