@@ -526,3 +526,40 @@ expect_allowed "wc -l PROJECT/guard.sh"         "wc -l $PROJECT/hooks/guard.sh"
 expect_allowed "grep pattern PROJECT/file"      "grep pattern $PROJECT/README.md"
 
 echo ""
+
+# ============================================================
+# <<\EOF backslash-escaped heredoc delimiter: sed/truncate/redirect
+# walkers must NOT false-positive on body bytes.
+# ------------------------------------------------------------
+# Copilot review on commit aa6409b flagged a theoretical concern that
+# the alias-escape strip (`\rm` -> `rm`) would also rewrite `<<\EOF`
+# to `<<EOF` and break blank_quoted_heredoc_bodies for the CMD_BLANKED
+# view. The guard avoids this by deriving CMD_BLANKED from CMD_RAW
+# (pre-normalization), not from the alias-stripped CMD (guard.sh:848,
+# documented at 833-840). These positives lock in that behavior for
+# the specific detectors Copilot named.
+# ============================================================
+echo "--- <<\\EOF body must not trigger sed/truncate/redirect walkers ---"
+
+expect_allowed 'sed -i mention in <<\EOF body (literal, not a live sed)' \
+  "cat > $PROJECT/tests/scratch.txt <<\\EOF
+sed -i 's/x/y/' /etc/passwd
+EOF"
+
+expect_allowed 'truncate mention in <<\EOF body (literal text)' \
+  "cat > $PROJECT/tests/scratch.txt <<\\EOF
+truncate -s 0 /etc/passwd
+EOF"
+
+expect_allowed 'redirect > mention in <<\EOF body (literal text)' \
+  "cat > $PROJECT/tests/scratch.txt <<\\EOF
+echo hi > /etc/passwd
+EOF"
+
+# Indented form <<-\EOF follows the same bash semantics.
+expect_allowed 'sed -i mention in <<-\EOF body (indented backslash form)' \
+  "cat > $PROJECT/tests/scratch.txt <<-\\EOF
+	sed -i 's/x/y/' /etc/passwd
+	EOF"
+
+echo ""
