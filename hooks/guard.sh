@@ -850,7 +850,16 @@ check_single_command() {
   CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/(^|[[:space:]])\(+/\1/g; s/\)+($|[[:space:]])/\1/g')"
   CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/\\([a-zA-Z_])/\1/g')"
   CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's#^/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/##')"
-  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's#([^<>|&;[:space:]])[[:space:]]+/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/#\1 #g')"
+  # Tokenize-aware /bin/ strip on CMD_BLANKED — MUST match the logic
+  # used on CMD (line 757). The previous broad sed
+  #   s#([^<>|&;[:space:]])[[:space:]]+/(bin|...)/#\1 #g
+  # stripped the prefix from ANY operand whose preceding char was a
+  # regular non-separator (closing quote, letter, digit), rewriting
+  # absolute outside-project targets to bare relative names. Since
+  # CMD_TOKENS_SCAN feeds the sed -i / truncate / redirect walkers,
+  # `sed -i '...' /usr/bin/owned` and `truncate -s 0 /bin/bash` slipped
+  # past the boundary check (Copilot review on commit aa6409b).
+  CMD_BLANKED=$(strip_command_name_prefix "$CMD_BLANKED")
   CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
   local -a CMD_TOKENS_SCAN=()
   while IFS= read -r tok; do
