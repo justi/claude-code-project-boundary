@@ -266,6 +266,56 @@ strip_command_name_prefix() {
   printf '%s%s%s' "$prefix" "$cmdname" "$rest"
 }
 
+command_name_is() {
+  # Return 0 iff the post-wrapper command-name token of $CMD equals $1.
+  # Walks $CMD tokens using the same rules as strip_command_name_prefix:
+  # skip `timeout <dur>`, sudo/env/nice/nohup/time/stdbuf/ionice/chrt/
+  # taskset/command/builtin/exec wrappers, VAR=val environment prefixes
+  # and -flag tokens. Any /bin/, /sbin/, /usr/bin/, /usr/sbin/,
+  # /usr/local/bin/ prefix on the command-name token is stripped before
+  # comparison, so `/usr/bin/install` is recognised as `install`.
+  #
+  # Why: several detectors (install, rsync, ...) use a bare
+  # `(^|[[:space:]])CMDNAME($|[[:space:]])` regex that matches the
+  # word anywhere in the command. For common names that are also
+  # package-manager subcommands (npm install / bundle install /
+  # poetry install / etc.) this produces false positives. Use this
+  # helper to require the actual command-name position.
+  local target=$1
+  local -a toks=()
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    toks+=("$t")
+  done < <(tokenize_args "$CMD")
+  local i prev_was_timeout=0
+  for i in "${!toks[@]}"; do
+    local raw="${toks[$i]}" t
+    t=$(strip_quotes "$raw")
+    if [ $prev_was_timeout -eq 1 ]; then
+      prev_was_timeout=0
+      case "$t" in
+        [0-9]*) continue ;;
+      esac
+    fi
+    case "$t" in
+      timeout)
+        prev_was_timeout=1; continue ;;
+      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
+        continue ;;
+    esac
+    case "$t" in
+      [A-Za-z_]*=*) continue ;;
+      -*) continue ;;
+    esac
+    case "$t" in
+      /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) t="${t##*/}" ;;
+    esac
+    [ "$t" = "$target" ]
+    return
+  done
+  return 1
+}
+
 is_shell_token() {
   local _t="$1"
   local _base="${_t##*/}"
@@ -1516,7 +1566,12 @@ check_single_command() {
   fi
 
   # --- install command: like cp, check all non-flag path arguments ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])install($|[[:space:]])'; then
+  # Must be tokenize-aware: the word `install` appears as a subcommand
+  # in package managers (npm install / bundle install / poetry install
+  # / cargo install / composer install / etc.), which are NOT the GNU
+  # install binary and must not be blocked. Only fire when `install`
+  # is the actual command-name token.
+  if command_name_is install; then
     local install_raw
     install_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//')
     # Skip mode arg (numeric, after -m/--mode), owner arg (after -o), group (after -g)
