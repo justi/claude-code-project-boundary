@@ -9,7 +9,7 @@ The contents of `session_hint.md` are `cat`-ed by the SessionStart hook and prep
 Rules when editing the hint:
 
 1. **Hard budget: 800 bytes of stdout.** Enforced by `tests/test_session_hint.sh`.
-2. **One line per quirk.** Prefer the "avoid X, use Y" pattern.
+2. **One short paragraph per quirk.** Prefer the "avoid X, use Y" pattern as a single line; a brief multi-line example (e.g. a heredoc showing the ONE supported form) is allowed when it saves Claude multiple tool calls. If you add an example, keep it minimal and still within the 800-byte budget.
 3. **Only add a quirk** if Claude measurably wastes tool calls without it.
 4. **Remove obsolete hints** as soon as the underlying guard behavior changes.
 5. If you hit the budget, **delete an old hint before adding a new one** — never bump the budget casually.
