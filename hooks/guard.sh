@@ -151,6 +151,11 @@ if [ -f "$ALLOWLIST_FILE" ]; then
   done < "$ALLOWLIST_FILE"
 fi
 
+# Precomputed parallel arrays filled after glob_to_regex is defined.
+# See the precompute loop later in the file.
+ALLOWLIST_REGEXES=()
+ALLOWLIST_BASE_REGEXES=()
+
 # --- Convert a glob pattern to an anchored regex ---
 # We can't rely on bash `[[ == ]]` + globstar because in that form `*`
 # matches `/` too (so `projects/*/memory` would also match
@@ -186,6 +191,25 @@ glob_to_regex() {
   done
   printf '^%s$' "$out"
 }
+
+# --- Precompute allowlist regexes once at load time ---
+# is_allowlisted is invoked many times per command and many commands
+# per session. Compiling glob_to_regex inside the hot loop wastes
+# cycles on identical work across every invocation. Compile once
+# here and reuse the cached regexes in is_allowlisted below.
+# Reported by Copilot review on commit aa6409b (guard.sh:298).
+_awl_i=0
+while [ $_awl_i -lt ${#ALLOWLIST_PATTERNS[@]} ]; do
+  _awl_p="${ALLOWLIST_PATTERNS[$_awl_i]}"
+  ALLOWLIST_REGEXES+=("$(glob_to_regex "$_awl_p")")
+  if [[ "$_awl_p" == *"/**" ]]; then
+    ALLOWLIST_BASE_REGEXES+=("$(glob_to_regex "${_awl_p%/**}")")
+  else
+    ALLOWLIST_BASE_REGEXES+=("")
+  fi
+  _awl_i=$((_awl_i+1))
+done
+unset _awl_i _awl_p
 
 # --- Check whether a resolved path is on the allowlist ---
 # Fails closed: empty allowlist means nothing is exempt.
@@ -333,20 +357,17 @@ is_source_token() {
 
 is_allowlisted() {
   local path="$1"
-  local pattern regex
-  for pattern in "${ALLOWLIST_PATTERNS[@]}"; do
-    regex=$(glob_to_regex "$pattern")
+  local i=0 n=${#ALLOWLIST_REGEXES[@]}
+  while [ $i -lt $n ]; do
+    local regex="${ALLOWLIST_REGEXES[$i]}"
     if [[ "$path" =~ $regex ]]; then
       return 0
     fi
-    if [[ "$pattern" == *"/**" ]]; then
-      local _base="${pattern%/**}"
-      local _base_regex
-      _base_regex=$(glob_to_regex "$_base")
-      if [[ "$path" =~ $_base_regex ]]; then
-        return 0
-      fi
+    local base_regex="${ALLOWLIST_BASE_REGEXES[$i]}"
+    if [ -n "$base_regex" ] && [[ "$path" =~ $base_regex ]]; then
+      return 0
     fi
+    i=$((i+1))
   done
   return 1
 }
