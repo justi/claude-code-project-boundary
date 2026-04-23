@@ -1132,9 +1132,13 @@ check_single_command() {
   # be added to the shared regex above because `-r` is a module-preload
   # flag in ruby/node (no code execution), so a generic `r` letter would
   # false-positive on `ruby -r json` / `node -r dotenv`. The matcher
-  # accepts attached forms (`-rcode`, `-Rcode`) and the long alias.
-  # Reported by Copilot review on PR #12.
-  if echo "$CMD" | grep -qE '(^|[[:space:]])php[[:space:]]+(-[a-zA-Z]*[rR]|--run)([[:space:]]|=|$|'\''|")'; then
+  # accepts attached forms (`-rcode`, `-Rcode`), quoted-attached
+  # (`-r'code'`), clustered-ending (`-ar`, `-aR`), and the long alias
+  # `--run`. Attached form was originally missed (guard.sh:1087 regex
+  # required a boundary char immediately after the `[rR]`, so
+  # `-rsystem('x')` slipped past). Re-reported by Copilot review on
+  # commit aa6409b (guard.sh:1068).
+  if echo "$CMD" | grep -qE '(^|[[:space:]])php[[:space:]]+(-[rR][^[:space:]=]*|-[a-zA-Z]*[rR]|--run)([[:space:]]|=|$|'\''|")'; then
     echo "BLOCKED: 'php -r/-R/--run' inline code cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
   fi
