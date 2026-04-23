@@ -687,3 +687,61 @@ expect_blocked "nohup /bin/curl -o /etc/passwd_test (wrapper + tool)" \
   "nohup /bin/curl -o /etc/passwd_test http://example.com"
 
 echo ""
+
+# ============================================================
+# 18. /bin path-prefix stripped from operands in CMD_BLANKED view
+# ------------------------------------------------------------
+# Section 17 covered the primary CMD stream (check_single_command at
+# guard.sh:756-757 — `^/bin/` anchor + tokenize-aware
+# strip_command_name_prefix). It did NOT cover CMD_BLANKED: the
+# heredoc-sanitised parallel stream at guard.sh:847-854 still ran a
+# broad sed (`([^<>|&;[:space:]])[[:space:]]+/(bin|...)/` → `\1 `)
+# that strips /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/
+# from any operand position whose preceding character is a regular
+# non-separator char (the exclusion class only rejects redirect
+# operators, pipes, semicolons, and whitespace).
+#
+# CMD_BLANKED feeds CMD_TOKENS_SCAN, which is what the sed -i,
+# truncate, and `>`-redirect walkers iterate. With /bin/ stripped
+# from a sed/truncate target operand, the absolute path collapses
+# to a bare relative name, gets joined under $EFFECTIVE_CWD, and
+# resolves inside the project — while the actual tool (sed -i,
+# truncate) writes to the absolute outside-project path at exec
+# time. The redirect walker happens to be safe because the
+# exclusion class includes `>`, but sed -i and truncate operand
+# positions are preceded by ordinary characters (closing quote,
+# letter, etc.) and match the broad sed.
+#
+# Reported by Copilot review on commit aa6409b (guard.sh:758/853).
+# ============================================================
+echo "--- 18. /bin prefix stripped from sed/truncate target operands (CMD_BLANKED) ---"
+
+expect_blocked "sed -i target /usr/bin/owned (operand prefix stripped in BLANKED view)" \
+  "sed -i 's/a/b/' /usr/bin/owned"
+
+expect_blocked "sed -i target /bin/sh" \
+  "sed -i 's/a/b/' /bin/sh"
+
+expect_blocked "sed -i target /sbin/owned" \
+  "sed -i 's/a/b/' /sbin/owned"
+
+expect_blocked "sed -i target /usr/local/bin/owned" \
+  "sed -i 's/a/b/' /usr/local/bin/owned"
+
+expect_blocked "truncate -s 0 /usr/bin/owned (operand prefix stripped)" \
+  "truncate -s 0 /usr/bin/owned"
+
+expect_blocked "truncate -s 0 /bin/bash (overwrite system binary)" \
+  "truncate -s 0 /bin/bash"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - sed -i on an inside-project file whose path mentions /bin/ only
+#   as a command-name prefix (wrapper + /bin/cmd inside the project)
+# - echo of a literal /bin/ path with no write tool
+expect_allowed "sed -i on PROJECT file (no /bin/ operand)" \
+  "sed -i 's/a/b/' $PROJECT/CHANGELOG.md"
+
+expect_allowed "echo /bin/sh (literal arg, no write tool)" \
+  "echo /bin/sh"
+
+echo ""
