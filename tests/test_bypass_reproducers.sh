@@ -813,3 +813,84 @@ expect_allowed "php composer.phar install" \
   "php composer.phar install"
 
 echo ""
+
+# ============================================================
+# 20. Multi-heredoc body ordering — quoted body range overlaps
+#     unquoted body and hides expansions from fail-closed scans.
+# ------------------------------------------------------------
+# bash accepts multiple `<<` openers on one command line and reads
+# the bodies in declaration order (each terminated by its own
+# delimiter on its own line). When the openers mix quoted and
+# unquoted delimiters (e.g. `<<EOF <<'Q'`), bash still expands the
+# unquoted body (parameter / command / arithmetic expansion runs
+# at parse time, even if that body's bytes end up unused on stdin
+# because only the LAST heredoc feeds a process).
+#
+# blank_quoted_heredoc_bodies queued ALL heredocs from an opener
+# line with body_start = next-line-start, so a later quoted
+# heredoc's blank range covered bytes that belonged to an earlier
+# unquoted heredoc body. Quoted body blanking then overwrote the
+# unquoted body's expansion bytes in CMD_EXPAND_SCAN, hiding
+# $(...) / backtick / $VAR from the fail-closed detectors —
+# exactly the shape Copilot review on commit aa6409b flagged.
+#
+# The correct reading is sequential: only the queue head's body
+# starts on the next line. Each subsequent heredoc's body starts
+# on the line AFTER its predecessor's terminator.
+# ============================================================
+echo "--- 20. multi-heredoc body ordering (mixed quoted / unquoted) ---"
+
+expect_blocked "<<EOF <<'Q' — \$(cmd) in unquoted EOF body" \
+  "cat > $PROJECT/tests/scratch.txt <<EOF <<'Q'
+\$(echo owned)
+EOF
+second body
+Q"
+
+expect_blocked "<<EOF <<'Q' — backtick in unquoted EOF body" \
+  "cat > $PROJECT/tests/scratch.txt <<EOF <<'Q'
+\`echo owned\`
+EOF
+second body
+Q"
+
+expect_blocked "<<EOF <<'Q' — \$VAR in unquoted EOF body" \
+  "cat > $PROJECT/tests/scratch.txt <<EOF <<'Q'
+\$SECRET
+EOF
+second body
+Q"
+
+expect_blocked "<<EOF <<\\Q — \$(cmd) in unquoted EOF body (backslash-quoted second)" \
+  "cat > $PROJECT/tests/scratch.txt <<EOF <<\\Q
+\$(echo owned)
+EOF
+second
+Q"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - all-quoted multi-heredoc with literal body text (no expansion)
+# - all-unquoted multi-heredoc with plain text (no expansion markers)
+# - single quoted heredoc unchanged
+expect_allowed "<<'A' <<'B' both quoted, literal bodies" \
+  "cat > $PROJECT/tests/scratch.txt <<'A' <<'B'
+literal text only
+A
+more literal text
+B"
+
+expect_allowed "<<EOF <<END both unquoted, no expansion markers" \
+  "cat > $PROJECT/tests/scratch.txt <<EOF <<END
+first plain line
+EOF
+second plain line
+END"
+
+expect_allowed "<<'Q' <<EOF quoted first, unquoted second with plain text" \
+  "cat > $PROJECT/tests/scratch.txt <<'Q' <<EOF
+quoted body with \$literal
+Q
+unquoted body with plain text
+EOF"
+
+echo ""
