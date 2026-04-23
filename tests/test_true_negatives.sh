@@ -528,6 +528,63 @@ expect_allowed "grep pattern PROJECT/file"      "grep pattern $PROJECT/README.md
 echo ""
 
 # ============================================================
+# /dev/null exemption — universal POSIX bit-bucket
+# ------------------------------------------------------------
+# /dev/null discards every byte written to it and exists on every
+# POSIX system at the same path. is_write_permitted itself is NOT
+# permissive for /dev/null — it still treats the path as outside
+# any project. The exemption is applied at specific walker call
+# sites (redirect, tee, curl -o, wget -O, dd of=) by short-
+# circuiting via is_discard_target BEFORE is_write_permitted runs,
+# so legitimate probe and silencing workflows pass without loosening
+# the shared helper for every caller.
+# ============================================================
+echo "--- /dev/null exemption (universal bit-bucket) ---"
+
+expect_allowed "curl -o /dev/null (HTTP probe / status check)" \
+  "curl -o /dev/null -w '%{http_code}' https://example.com/"
+
+expect_allowed "wget -O /dev/null (HTTP probe)" \
+  "wget -O /dev/null https://example.com/"
+
+expect_allowed "redirect > /dev/null (silence stdout)" \
+  "echo noisy > /dev/null"
+
+expect_allowed "redirect 2> /dev/null (silence stderr)" \
+  "some_cmd 2> /dev/null"
+
+expect_allowed "redirect &> /dev/null (silence both)" \
+  "some_cmd &> /dev/null"
+
+expect_allowed "tee /dev/null (no-op tee)" \
+  "echo x | tee /dev/null"
+
+expect_allowed "dd of=/dev/null (discard)" \
+  "dd if=$PROJECT/README.md of=/dev/null bs=1"
+
+# Counterexamples — non-discard contexts must STAY blocked even when the
+# target happens to be /dev/null. Codex review on the proof-of-concept
+# flagged that sed -i rewrites via a temp file + rename in the target's
+# parent directory (/dev/), so /dev/null must not be uniformly exempted.
+# These regression assertions keep the narrow-scope design honest.
+expect_blocked "sed -i /dev/null (writes temp file under /dev/)" \
+  "sed -i 's/a/b/' /dev/null"
+
+expect_blocked "truncate -s 0 /dev/null (modifies real file node)" \
+  "truncate -s 0 /dev/null"
+
+expect_blocked "cp src /dev/null (destination, real filesystem write)" \
+  "cp $PROJECT/README.md /dev/null"
+
+expect_blocked "mv src /dev/null (destination, real filesystem write)" \
+  "mv $PROJECT/README.md /dev/null"
+
+expect_blocked "ln -sf src /dev/null (symlink target replaces device node)" \
+  "ln -sf $PROJECT/README.md /dev/null"
+
+echo ""
+
+# ============================================================
 # <<\EOF backslash-escaped heredoc delimiter: sed/truncate/redirect
 # walkers must NOT false-positive on body bytes.
 # ------------------------------------------------------------

@@ -408,6 +408,30 @@ command_name_is() {
   return 1
 }
 
+is_discard_target() {
+  # Return 0 iff $1 is a POSIX bit-bucket write target whose bytes are
+  # guaranteed to be discarded with no real filesystem write.
+  #
+  # /dev/null is the canonical bit-bucket on every POSIX system
+  # (Linux, macOS, BSD) at the same path. Writes to it are accepted
+  # by the kernel and dropped — there is no filesystem target, no
+  # parent directory mutation, no symlink side-effect. Callers that
+  # KNOW they are writing a target (redirect operators, `tee`,
+  # `curl -o`, `wget -O`, `dd of=`) can short-circuit here before
+  # invoking is_write_permitted, so probe and silencing workflows
+  # like `curl -o /dev/null` and `2>/dev/null` don't require a
+  # per-project allowlist entry.
+  #
+  # IMPORTANT: this must NOT be used from call sites that do an
+  # in-place edit via temp-file + rename (`sed -i`, `truncate`) or
+  # from `cp/mv/ln/install/rsync` targets — those DO write under
+  # the parent directory of the nominal target (e.g. sed -i creates
+  # a temp file in /dev/ before renaming over /dev/null), and the
+  # boundary check must still fire there. See is_write_permitted
+  # docstring for the full separation of write semantics.
+  [ "$1" = "/dev/null" ]
+}
+
 is_shell_token() {
   local _t="$1"
   local _base="${_t##*/}"
@@ -1815,6 +1839,8 @@ check_single_command() {
       fi
       RESOLVED=$(resolve_path "$TARGET")
 
+      # /dev/null is a discard sink for tee (`echo x | tee /dev/null`).
+      is_discard_target "$RESOLVED" && continue
       if ! is_write_permitted "$RESOLVED"; then
         echo "BLOCKED: 'tee' targets '$RESOLVED' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
@@ -1834,6 +1860,8 @@ check_single_command() {
       fi
       local resolved_curl
       resolved_curl=$(resolve_path "$curl_output")
+      # /dev/null is a discard sink for HTTP probes (`curl -o /dev/null -w %{http_code}`).
+      is_discard_target "$resolved_curl" && continue
       if ! is_write_permitted "$resolved_curl"; then
         echo "BLOCKED: 'curl' output file '$resolved_curl' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
@@ -1851,6 +1879,8 @@ check_single_command() {
       fi
       local resolved_wget
       resolved_wget=$(resolve_path "$wget_output")
+      # /dev/null is a discard sink (`wget -O /dev/null URL`).
+      is_discard_target "$resolved_wget" && continue
       if ! is_write_permitted "$resolved_wget"; then
         echo "BLOCKED: 'wget' output file '$resolved_wget' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
         exit 2
@@ -1874,9 +1904,12 @@ check_single_command() {
           fi
           local resolved_dd
           resolved_dd=$(resolve_path "$dd_output")
-          if ! is_write_permitted "$resolved_dd"; then
-            echo "BLOCKED: 'dd' output '$resolved_dd' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-            exit 2
+          # /dev/null is a discard sink (`dd if=x of=/dev/null`).
+          if ! is_discard_target "$resolved_dd"; then
+            if ! is_write_permitted "$resolved_dd"; then
+              echo "BLOCKED: 'dd' output '$resolved_dd' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+              exit 2
+            fi
           fi
         fi
       fi
@@ -1993,9 +2026,13 @@ check_single_command() {
         echo "BLOCKED: Redirect target symlink chain too deep or circular at '$resolved_redir'. Ask user for explicit permission." >&2
         exit 2
       fi
-      if ! is_write_permitted "$resolved_redir"; then
-        echo "BLOCKED: Redirect target '$resolved_redir' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
+      # /dev/null is a discard sink for every redirect form
+      # (`> /dev/null`, `2> /dev/null`, `&> /dev/null`, `2>&1 > /dev/null`).
+      if ! is_discard_target "$resolved_redir"; then
+        if ! is_write_permitted "$resolved_redir"; then
+          echo "BLOCKED: Redirect target '$resolved_redir' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
       fi
     fi
   done
