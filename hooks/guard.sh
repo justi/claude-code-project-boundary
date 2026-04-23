@@ -290,6 +290,74 @@ strip_command_name_prefix() {
   printf '%s%s%s' "$prefix" "$cmdname" "$rest"
 }
 
+strip_command_name_quotes() {
+  # If the command-name token of $1 is wrapped in matching single or
+  # double quotes (e.g. "rm", 'rm', "/bin/rm"), replace that token
+  # with its unquoted form so downstream detectors that match on bare
+  # names recognise it. bash strips surrounding quotes from a command
+  # word at exec time, so the quoted form invokes the same binary —
+  # failing to recognise it here would leak every bare-name detector
+  # (rm, mv, cp, ln, chmod, chown, tee, curl, wget, find, sed,
+  # truncate, rsync) past the guard. Walks tokens using the same
+  # wrapper / env-var / flag skipping rules as strip_command_name_prefix.
+  # Reported by Copilot review on commit 22112ba (guard.sh:1078, 1503).
+  local cmd="$1"
+  local -a toks=()
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    toks+=("$t")
+  done < <(tokenize_args "$cmd")
+
+  local idx=-1 i prev_was_timeout=0
+  for i in "${!toks[@]}"; do
+    local raw="${toks[$i]}"
+    local t
+    t=$(strip_quotes "$raw")
+    if [ $prev_was_timeout -eq 1 ]; then
+      prev_was_timeout=0
+      case "$t" in
+        [0-9]*) continue ;;
+      esac
+    fi
+    case "$t" in
+      timeout)
+        prev_was_timeout=1; continue ;;
+      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
+        continue ;;
+    esac
+    case "$t" in
+      [A-Za-z_]*=*) continue ;;
+      -*) continue ;;
+    esac
+    idx=$i
+    break
+  done
+
+  [[ $idx -lt 0 ]] && { printf '%s' "$cmd"; return; }
+
+  local raw="${toks[$idx]}"
+  # Only rewrite when the raw token is itself surrounded by matching
+  # single or double quotes — tokenize_args preserves the wrapping
+  # quote bytes on the token, so `"rm"` / `'rm'` / `"/bin/rm"` all
+  # match. Tokens without surrounding quotes (bare `rm` or
+  # partially-quoted like `"rm"abc`) are left alone.
+  case "$raw" in
+    \"?*\") ;;
+    \'?*\') ;;
+    *) printf '%s' "$cmd"; return ;;
+  esac
+
+  local bare="${raw:1:${#raw}-2}"
+
+  # Replace first occurrence of $raw in $cmd with $bare.
+  local prefix="${cmd%%${raw}*}"
+  if [ "$prefix" = "$cmd" ]; then
+    printf '%s' "$cmd"; return
+  fi
+  local rest="${cmd:$((${#prefix} + ${#raw}))}"
+  printf '%s%s%s' "$prefix" "$bare" "$rest"
+}
+
 command_name_is() {
   # Return 0 iff the post-wrapper command-name token of $CMD equals $1.
   # Walks $CMD tokens using the same rules as strip_command_name_prefix:
@@ -835,6 +903,12 @@ check_single_command() {
   # the start-of-CMD case is preserved so that a CMD whose tokenizer
   # output is empty (defensively impossible but cheap) still gets the
   # leading prefix stripped.
+  # Strip surrounding quotes from the command-name token so that
+  # `"rm" /etc/x` / `'rm' /etc/x` / `"/bin/rm" /etc/x` are still
+  # recognised by bare-name detectors. bash strips these quotes at
+  # exec time, invoking the bare binary either way. Must run before
+  # the /bin/-prefix passes so those see the bare path.
+  CMD="$(strip_command_name_quotes "$CMD")"
   CMD="$(printf '%s' "$CMD" | sed -E 's#^/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/##')"
   CMD="$(strip_command_name_prefix "$CMD")"
   # Trim duplicated whitespace introduced by the substitutions.
@@ -931,6 +1005,11 @@ check_single_command() {
   CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
   CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/(^|[[:space:]])\(+/\1/g; s/\)+($|[[:space:]])/\1/g')"
   CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/\\([a-zA-Z_])/\1/g')"
+  # Strip surrounding quotes from the command-name token — same reason
+  # as for CMD (line ~907). Without this, detectors that walk
+  # CMD_TOKENS_SCAN (sed -i, truncate, redirect-target) miss a quoted
+  # command even after heredoc blanking.
+  CMD_BLANKED="$(strip_command_name_quotes "$CMD_BLANKED")"
   CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's#^/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/##')"
   # Tokenize-aware /bin/ strip on CMD_BLANKED — MUST match the logic
   # used on CMD (line 757). The previous broad sed
