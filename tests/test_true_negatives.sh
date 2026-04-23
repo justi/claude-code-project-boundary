@@ -409,3 +409,120 @@ expect_allowed "cat > PROJECT/file <<-\\EOF (indented backslash form)" \
 	EOF"
 
 echo ""
+
+# ============================================================
+# Common Claude workflows — must stay allowed
+# ------------------------------------------------------------
+# Day-to-day commands Claude issues across Ruby / Python / Node / PHP /
+# Go / git / build / test / package-manager workflows. These are
+# legitimate inside-project operations or read-only queries that must
+# never be false-positively blocked by any tightening of the guard.
+# Patterns distilled from real assistant sessions + CLAUDE.md hints
+# (hook discipline, test-before-advise rule, TDD flow).
+# ============================================================
+echo "--- common Claude workflows (git / pkg mgr / test / lint / run) ---"
+
+# --- git: the bread-and-butter. Read-only / in-project mutations. ---
+expect_allowed "git status"           "git status"
+expect_allowed "git status -uall"     "git status -uall"
+expect_allowed "git diff"             "git diff"
+expect_allowed "git diff --staged"    "git diff --staged"
+expect_allowed "git log --oneline -5" "git log --oneline -5"
+expect_allowed "git log main..HEAD"   "git log main..HEAD"
+expect_allowed "git show HEAD"        "git show HEAD"
+expect_allowed "git blame guard.sh"   "git blame $PROJECT/hooks/guard.sh"
+expect_allowed "git branch"           "git branch"
+expect_allowed "git branch -a"        "git branch -a"
+expect_allowed "git rev-parse HEAD"   "git rev-parse HEAD"
+expect_allowed "git rev-parse --short HEAD" "git rev-parse --short HEAD"
+expect_allowed "git add PROJECT/file" "git add $PROJECT/README.md"
+expect_allowed "git stash list"       "git stash list"
+expect_allowed "git remote -v"        "git remote -v"
+expect_allowed "git fetch origin"     "git fetch origin"
+
+# --- gh CLI: PR / issue / release operations on remote, read mostly. ---
+expect_allowed "gh pr view 12"                  "gh pr view 12"
+expect_allowed "gh pr list"                     "gh pr list"
+expect_allowed "gh release list"                "gh release list"
+expect_allowed "gh api /repos/o/r/pulls/1"      "gh api /repos/o/r/pulls/1"
+
+# --- package managers: install/update inside project. ---
+expect_allowed "npm install"          "npm install"
+expect_allowed "npm ci"               "npm ci"
+expect_allowed "npm run build"        "npm run build"
+expect_allowed "npm test"             "npm test"
+expect_allowed "yarn install"         "yarn install"
+expect_allowed "pnpm install"         "pnpm install"
+expect_allowed "bundle install"       "bundle install"
+expect_allowed "bundle exec rspec"    "bundle exec rspec"
+expect_allowed "bundle exec rubocop"  "bundle exec rubocop"
+expect_allowed "pip install -r requirements.txt" "pip install -r $PROJECT/requirements.txt"
+expect_allowed "poetry install"       "poetry install"
+expect_allowed "uv sync"              "uv sync"
+expect_allowed "cargo build"          "cargo build"
+expect_allowed "cargo test"           "cargo test"
+expect_allowed "go build ./..."       "go build ./..."
+expect_allowed "go test ./..."        "go test ./..."
+expect_allowed "mix deps.get"         "mix deps.get"
+expect_allowed "composer install"     "composer install"
+
+# --- test runners: fine-grained invocations that MUST pass. ---
+expect_allowed "rspec spec/foo_spec.rb"        "rspec $PROJECT/spec/foo_spec.rb"
+expect_allowed "pytest tests/"                 "pytest $PROJECT/tests/"
+expect_allowed "pytest -k pattern"             "pytest -k 'sed or truncate'"
+expect_allowed "jest --watch"                  "jest --watch"
+expect_allowed "vitest run"                    "vitest run"
+expect_allowed "bash tests/test_guard.sh"      "bash $PROJECT/tests/test_guard.sh"
+
+# --- language runtimes without inline-code flags: safe ---
+expect_allowed "ruby script.rb"                 "ruby $PROJECT/script.rb"
+expect_allowed "ruby -v"                        "ruby -v"
+expect_allowed "ruby --version"                 "ruby --version"
+expect_allowed "python script.py"               "python $PROJECT/script.py"
+expect_allowed "python3 -V"                     "python3 -V"
+expect_allowed "python -m pytest"               "python -m pytest"
+expect_allowed "python -m venv .venv"           "python -m venv $PROJECT/.venv"
+expect_allowed "node script.js"                 "node $PROJECT/script.js"
+expect_allowed "node --version"                 "node --version"
+expect_allowed "deno run script.ts"             "deno run $PROJECT/script.ts"
+expect_allowed "bun run script.ts"              "bun run $PROJECT/script.ts"
+expect_allowed "perl -v"                        "perl -v"
+expect_allowed "perl script.pl"                 "perl $PROJECT/script.pl"
+expect_allowed "php -v"                         "php -v"
+expect_allowed "php -l file.php"                "php -l $PROJECT/file.php"
+expect_allowed "php script.php"                 "php $PROJECT/script.php"
+
+# --- linters / formatters: read or rewrite in-project files. ---
+expect_allowed "eslint src/"                    "eslint $PROJECT/src/"
+expect_allowed "prettier --write src/"          "prettier --write $PROJECT/src/"
+expect_allowed "black ."                        "black $PROJECT/"
+expect_allowed "ruff check"                     "ruff check"
+expect_allowed "shellcheck hooks/guard.sh"      "shellcheck $PROJECT/hooks/guard.sh"
+
+# --- sed/awk without destructive flags: read-only projections. ---
+expect_allowed "sed -n print range"             "sed -n '10,20p' $PROJECT/README.md"
+expect_allowed "sed pipeline (no -i)"           "cat $PROJECT/README.md | sed 's/old/new/'"
+expect_allowed "awk projection"                 "awk '{print \$1}' $PROJECT/README.md"
+expect_allowed "awk -F delimiter"               "awk -F: '{print \$1}' $PROJECT/README.md"
+
+# --- CLAUDE.md hint: heredoc commit flow must pass (never block) ---
+expect_allowed "git commit -F - heredoc"        "git commit -F - <<'EOF'
+title
+
+body with details
+EOF"
+
+# --- misc safe: env/version probes, file listing, basic queries ---
+expect_allowed "env"                            "env"
+expect_allowed "pwd"                            "pwd"
+expect_allowed "whoami"                         "whoami"
+expect_allowed "date"                           "date"
+expect_allowed "ls PROJECT"                     "ls $PROJECT"
+expect_allowed "ls -la PROJECT/hooks"           "ls -la $PROJECT/hooks"
+expect_allowed "cat PROJECT/README.md"          "cat $PROJECT/README.md"
+expect_allowed "head -20 PROJECT/CHANGELOG.md"  "head -20 $PROJECT/CHANGELOG.md"
+expect_allowed "tail -f PROJECT/log.txt"        "tail -f $PROJECT/log.txt"
+expect_allowed "wc -l PROJECT/guard.sh"         "wc -l $PROJECT/hooks/guard.sh"
+expect_allowed "grep pattern PROJECT/file"      "grep pattern $PROJECT/README.md"
+
+echo ""

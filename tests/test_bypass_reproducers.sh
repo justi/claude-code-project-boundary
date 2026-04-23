@@ -745,3 +745,71 @@ expect_allowed "echo /bin/sh (literal arg, no write tool)" \
   "echo /bin/sh"
 
 echo ""
+
+# ============================================================
+# 19. php inline-code attached-flag form (`php -rcode`)
+# ------------------------------------------------------------
+# The dedicated PHP rule added for prior Copilot feedback
+# (guard.sh:1087) matches `php -r`, `-R`, `--run` in space-separated
+# and long-flag forms:
+#   php[[:space:]]+(-[a-zA-Z]*[rR]|--run)([[:space:]]|=|$|'|")
+# PHP accepts attached forms too (POSIX-style short-flag clustering):
+#   php -rcode             argv = ["php", "-rcode"] → executes `code`
+#   php -Rcode
+# The current regex requires the match to END at a boundary
+# (space/=/$/quote), so `-rsystem('x')` (no separator between -r and
+# the code) fails to match and bypasses the inline-code block.
+#
+# Reported by Copilot review on commit aa6409b (guard.sh:1068) — the
+# finding was partially addressed via the dedicated PHP rule, but the
+# attached form remained uncovered.
+# ============================================================
+echo "--- 19. php inline-code attached flag form ---"
+
+expect_blocked "php -rsystem('x') (attached -r, no separator)" \
+  "php -rsystem('rm /etc/passwd_test')"
+
+expect_blocked "php -Rsystem(...) attached -R" \
+  "php -Rsystem('x')"
+
+expect_blocked "php -recho attached short" \
+  "php -recho 1;"
+
+# Positive cases — legitimate php invocations must remain ALLOWED.
+# Every variant either (a) has no -r/-R flag or (b) uses -r in a
+# non-inline-code sense (PHP has no such sense — any -r prefix is
+# inline code — so only (a) matters).
+expect_allowed "php script.php (no flags)" \
+  "php script.php"
+
+expect_allowed "php -v (version)" \
+  "php -v"
+
+expect_allowed "php --version" \
+  "php --version"
+
+expect_allowed "php -l script.php (lint)" \
+  "php -l script.php"
+
+expect_allowed "php -f script.php (explicit script)" \
+  "php -f script.php"
+
+expect_allowed "php -d memory_limit=256M script.php" \
+  "php -d memory_limit=256M script.php"
+
+expect_allowed "php -S localhost:8080 (built-in server)" \
+  "php -S localhost:8080"
+
+expect_allowed "php -i (config info)" \
+  "php -i"
+
+expect_allowed "php -m (modules list)" \
+  "php -m"
+
+expect_allowed "php artisan migrate (Laravel)" \
+  "php artisan migrate"
+
+expect_allowed "php composer.phar install" \
+  "php composer.phar install"
+
+echo ""
