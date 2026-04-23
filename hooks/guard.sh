@@ -676,15 +676,19 @@ blank_quoted_heredoc_bodies() {
         fi
         ci=$((ci+1))
       done
-      # All heredocs discovered on this command-context line start body on NEXT line.
-      local qi=0
-      while [ $qi -lt ${#HB[@]} ]; do
-        if [ "${HB[$qi]}" = "-1" ]; then
-          HB[$qi]=$((lend+1))
-          [ $li -eq $((num_lines-1)) ] && HB[$qi]=$n
-        fi
-        qi=$((qi+1))
-      done
+      # Only the queue HEAD's body starts on the line after this opener.
+      # Subsequent heredocs' bodies begin on the line AFTER their
+      # predecessor's terminator — we defer their body_start until the
+      # predecessor is popped (see the matching block in body context
+      # below). Previously we set body_start = lend+1 for every heredoc
+      # on this line, so a later quoted heredoc's blank range covered
+      # bytes belonging to an earlier unquoted body, hiding $(...) /
+      # backtick / $VAR in the unquoted body from fail-closed scans.
+      # Reported by Copilot review on commit aa6409b.
+      if [ ${#HB[@]} -gt 0 ] && [ "${HB[0]}" = "-1" ]; then
+        HB[0]=$((lend+1))
+        [ $li -eq $((num_lines-1)) ] && HB[0]=$n
+      fi
     else
       # Body context — check for terminator of queue head.
       local hd="${HD[0]}" hq="${HQ[0]}" hi_flag="${HI[0]}" hbs="${HB[0]}"
@@ -697,6 +701,13 @@ blank_quoted_heredoc_bodies() {
           BS+=("$hbs"); BE+=("$lstart")
         fi
         HD=("${HD[@]:1}"); HQ=("${HQ[@]:1}"); HI=("${HI[@]:1}"); HB=("${HB[@]:1}")
+        # The predecessor just popped; the next queue head's body starts
+        # on the line AFTER this terminator line. Matches the deferred
+        # body_start in the opener-context block above.
+        if [ ${#HD[@]} -gt 0 ] && [ "${HB[0]}" = "-1" ]; then
+          HB[0]=$((lend+1))
+          [ $li -eq $((num_lines-1)) ] && HB[0]=$n
+        fi
       fi
     fi
     li=$((li+1))
