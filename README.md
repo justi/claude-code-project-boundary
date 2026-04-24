@@ -54,6 +54,7 @@ Allows destructive operations **within your project** but blocks them **outside*
 - **Path traversal** — `..` segments are resolved before boundary check
 - **`~` and `$HOME` expansion** — `rm ~/file` and `rm $HOME/file` are correctly detected as outside-project
 - **Symlink resolution** — handles macOS `/var` → `/private/var`, dereferences symlink chains in Edit/Write/MultiEdit (fail-closed after 20 hops)
+- **`/dev/null` bit-bucket** — `curl -o /dev/null`, `2>/dev/null`, `tee /dev/null`, `dd of=/dev/null`, and all redirect target forms are allowed so routine probe and silencing workflows don't hit the boundary. Narrow exemption: the discard-only walkers short-circuit *before* `is_write_permitted`; `sed -i /dev/null`, `truncate /dev/null`, and `cp|mv|ln ... /dev/null` remain blocked because each performs a real filesystem write under `/dev/`.
 
 ### Path allowlist (`hooks/allowlist.conf`)
 
