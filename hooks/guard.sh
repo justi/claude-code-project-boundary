@@ -910,35 +910,8 @@ check_single_command() {
   run_inplace_detectors
 
 
-  # --- Chmod/chown outside project ---
-  for CMD_NAME in chmod chown; do
-    if echo "$CMD" | grep -qE "(^|[[:space:]])${CMD_NAME}($|[[:space:]])"; then
-      # Extract args after command name, skip flags, then skip the first
-      # non-flag token (mode for chmod, owner[:group] for chown)
-      local perm_raw
-      perm_raw=$(echo "$CMD" | grep -oE "(^|[[:space:]])${CMD_NAME}[[:space:]]+.*" | sed "s/^[[:space:]]*${CMD_NAME}[[:space:]]*//")
-      local skipped_first=0
-
-      while IFS= read -r TARGET; do
-        [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
-        if [[ $skipped_first -eq 0 ]]; then
-          skipped_first=1
-          continue
-        fi
-        TARGET=$(expand_path "$TARGET")
-        if [[ "$TARGET" != /* ]]; then
-          TARGET="$EFFECTIVE_CWD/$TARGET"
-        fi
-        RESOLVED=$(resolve_path "$TARGET")
-
-        # STRICT: chmod/chown can weaponize permissions; allowlist must not apply.
-        if ! is_inside_project "$RESOLVED"; then
-          echo "BLOCKED: '${CMD_NAME}' targets '$RESOLVED' which is OUTSIDE project directory. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      done < <(tokenize_args "$perm_raw")
-    fi
-  done
+  # chmod / chown moved to hooks/lib/detectors/destructive.sh.
+  run_permissions_detectors
 }
 
 # --- Split command into sub-commands and check each ---

@@ -193,3 +193,42 @@ run_destructive_detectors() {
     done < <(tokenize_args "$ln_raw")
   fi
 }
+
+# --- chmod / chown boundary check ---
+# Weaponizable permission changes on files outside the project are
+# blocked. STRICT: allowlist does not apply because an attacker who
+# can chmod an allowlisted dir's sibling path can still pivot.
+# Separate function because chmod/chown originally run at a later
+# position in check_single_command than the xargs..ln cluster; this
+# lets us preserve the original evaluation order from the caller.
+run_permissions_detectors() {
+  local CMD_NAME TARGET RESOLVED
+  for CMD_NAME in chmod chown; do
+    if echo "$CMD" | grep -qE "(^|[[:space:]])${CMD_NAME}($|[[:space:]])"; then
+      # Extract args after command name, skip flags, then skip the first
+      # non-flag token (mode for chmod, owner[:group] for chown)
+      local perm_raw
+      perm_raw=$(echo "$CMD" | grep -oE "(^|[[:space:]])${CMD_NAME}[[:space:]]+.*" | sed "s/^[[:space:]]*${CMD_NAME}[[:space:]]*//")
+      local skipped_first=0
+
+      while IFS= read -r TARGET; do
+        [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
+        if [[ $skipped_first -eq 0 ]]; then
+          skipped_first=1
+          continue
+        fi
+        TARGET=$(expand_path "$TARGET")
+        if [[ "$TARGET" != /* ]]; then
+          TARGET="$EFFECTIVE_CWD/$TARGET"
+        fi
+        RESOLVED=$(resolve_path "$TARGET")
+
+        # STRICT: chmod/chown can weaponize permissions; allowlist must not apply.
+        if ! is_inside_project "$RESOLVED"; then
+          echo "BLOCKED: '${CMD_NAME}' targets '$RESOLVED' which is OUTSIDE project directory. Ask user for explicit permission." >&2
+          exit 2
+        fi
+      done < <(tokenize_args "$perm_raw")
+    fi
+  done
+}
