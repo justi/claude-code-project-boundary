@@ -1,6 +1,35 @@
 #!/bin/bash
 set -euo pipefail
 
+# Load sibling library modules. Resolve this script's directory so the
+# source path works whether guard.sh is invoked directly, through a
+# symlink to the script itself, or through a CLAUDE_PLUGIN_ROOT that
+# differs from $PWD. A plain `dirname "${BASH_SOURCE[0]}"` would
+# return the SYMLINK's directory when guard.sh itself is symlinked
+# (e.g. installed as `/some/path/link/guard.sh -> /real/hooks/guard.sh`),
+# so the sourced `lib/` siblings would be looked up in the wrong
+# directory. Chase the symlink chain to the real file before taking
+# its directory. Portable across Linux and macOS (no `readlink -f`
+# dependency). Reported by Copilot review on PR #15.
+_guard_source="${BASH_SOURCE[0]}"
+while [ -L "$_guard_source" ]; do
+  _guard_target="$(readlink "$_guard_source")"
+  case "$_guard_target" in
+    /*) _guard_source="$_guard_target" ;;
+    *)  _guard_source="$(dirname "$_guard_source")/$_guard_target" ;;
+  esac
+done
+_GUARD_DIR="$(cd "$(dirname "$_guard_source")" && pwd)"
+unset _guard_source _guard_target
+# shellcheck source=lib/tokenize.sh
+source "$_GUARD_DIR/lib/tokenize.sh"
+# shellcheck source=lib/command_name.sh
+source "$_GUARD_DIR/lib/command_name.sh"
+# shellcheck source=lib/paths.sh
+source "$_GUARD_DIR/lib/paths.sh"
+# shellcheck source=lib/heredoc.sh
+source "$_GUARD_DIR/lib/heredoc.sh"
+
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
@@ -34,93 +63,7 @@ if [ -z "$EFFECTIVE_CWD" ]; then
   EFFECTIVE_CWD="$PROJECT_DIR"
 fi
 
-# --- Portable realpath in pure bash ---
-# macOS realpath does not support -m (non-existent path resolution).
-# This pure-bash implementation handles .., . and works with non-existent paths.
-# For non-existent paths, it resolves the nearest existing ancestor via pwd -P
-# to handle symlinks (e.g. /var -> /private/var on macOS).
-resolve_path() {
-  local p="$1"
-  # Make absolute
-  if [[ "$p" != /* ]]; then
-    p="$(pwd)/$p"
-  fi
-  # Normalize: collapse `.` and `//` segments only. DO NOT lexically resolve
-  # `..`, because that would skip over a symlinked intermediate directory
-  # (e.g. `memory/linkdir/../x` with `linkdir -> /tmp` is `/tmp/x` at the
-  # OS level, not `memory/x`). `..` is left for physical resolution via
-  # `cd $check && pwd -P` below, which honors symlink semantics correctly.
-  local -a parts=()
-  local IFS='/'
-  for segment in $p; do
-    if [[ "$segment" != "." && -n "$segment" ]]; then
-      parts+=("$segment")
-    fi
-  done
-  local IFS='/'
-  local normalized
-  if [[ ${#parts[@]} -eq 0 ]]; then
-    normalized="/"
-  else
-    normalized="/${parts[*]}"
-  fi
-  # Walk up to find the nearest existing ancestor directory and resolve symlinks
-  local check="$normalized"
-  local tail=""
-  while [[ ! -e "$check" && "$check" != "/" ]]; do
-    tail="/$(basename "$check")$tail"
-    check="$(dirname "$check")"
-  done
-  local combined
-  if [[ -d "$check" ]]; then
-    # `check` is a directory (possibly via symlink) — canonicalize it.
-    # `cd && pwd -P` follows symlinks fully, so `.../linkdir -> /etc`
-    # resolves to `/etc`. This is essential: if left unresolved, the
-    # subsequent lexical `..` pass would incorrectly pop `linkdir` and
-    # leave the caller inside the allowlisted dir.
-    local real_ancestor
-    real_ancestor=$(cd -P "$check" && pwd -P)
-    combined="${real_ancestor}${tail}"
-  elif [[ -e "$check" ]]; then
-    # File exists — canonicalize the directory component so that intermediate
-    # symlinks are fully dereferenced (macOS /var -> /private/var is one
-    # case; more importantly, a user-created symlink inside an allowlisted
-    # dir like `memory/linkdir -> /etc` resolves here, otherwise the
-    # allowlist matches the unresolved path and permits the write).
-    local _f_dir _f_base
-    _f_dir=$(dirname "$check")
-    _f_base=$(basename "$check")
-    if [[ -d "$_f_dir" ]]; then
-      local _real_f_dir
-      _real_f_dir=$(cd -P "$_f_dir" && pwd -P)
-      combined="${_real_f_dir}/${_f_base}${tail}"
-    else
-      combined="$normalized"
-    fi
-  else
-    combined="$normalized"
-  fi
-  # Final pass: apply lexical `..` resolution on the combined result.
-  # This is SAFE here (unlike at the top of the function) because the
-  # ancestor has been physically canonicalized — no symlinks remain in
-  # the prefix, so `..` cannot silently cross one. This step collapses
-  # path-traversal attempts like `$PROJECT/safe/../../etc/passwd` into
-  # `/etc/passwd` for the boundary check.
-  local -a _final=()
-  local IFS='/'
-  for _seg in $combined; do
-    if [[ "$_seg" == ".." ]]; then
-      [[ ${#_final[@]} -gt 0 ]] && unset '_final[${#_final[@]}-1]'
-    elif [[ -n "$_seg" ]]; then
-      _final+=("$_seg")
-    fi
-  done
-  if [[ ${#_final[@]} -eq 0 ]]; then
-    echo "/"
-  else
-    echo "/${_final[*]}"
-  fi
-}
+# resolve_path moved to hooks/lib/paths.sh.
 
 # Resolve PROJECT_DIR itself so symlinks (e.g. /var -> /private/var on macOS) match
 PROJECT_DIR=$(resolve_path "$PROJECT_DIR")
@@ -156,41 +99,7 @@ fi
 ALLOWLIST_REGEXES=()
 ALLOWLIST_BASE_REGEXES=()
 
-# --- Convert a glob pattern to an anchored regex ---
-# We can't rely on bash `[[ == ]]` + globstar because in that form `*`
-# matches `/` too (so `projects/*/memory` would also match
-# `projects/a/b/memory`). Custom translator enforces path-segment semantics:
-#   `**` matches any characters including `/`
-#   `*`  matches any characters EXCEPT `/`
-#   `?`  matches a single character except `/`
-#   other regex metachars are escaped to literals
-glob_to_regex() {
-  local g="$1"
-  local out=""
-  local i=0 n=${#g}
-  while [ $i -lt $n ]; do
-    local c="${g:$i:1}"
-    if [ "$c" = "*" ] && [ $((i + 1)) -lt $n ] && [ "${g:$((i + 1)):1}" = "*" ]; then
-      out="${out}.*"
-      i=$((i + 2))
-    elif [ "$c" = "*" ]; then
-      out="${out}[^/]*"
-      i=$((i + 1))
-    elif [ "$c" = "?" ]; then
-      out="${out}[^/]"
-      i=$((i + 1))
-    else
-      case "$c" in
-        .|+|\(|\)|\{|\}|\||\^|\$|\\|\[|\])
-          out="${out}\\${c}" ;;
-        *)
-          out="${out}${c}" ;;
-      esac
-      i=$((i + 1))
-    fi
-  done
-  printf '^%s$' "$out"
-}
+# glob_to_regex moved to hooks/lib/tokenize.sh (sourced at top of file).
 
 # --- Precompute allowlist regexes once at load time ---
 # is_allowlisted is invoked many times per command and many commands
@@ -215,254 +124,17 @@ unset _awl_i _awl_p
 # Fails closed: empty allowlist means nothing is exempt.
 # A pattern ending in `/**` also matches the directory itself (gitignore-like
 # semantics: `memory/**` allows both `memory` and its contents).
-# --- Detect shell/source tokens by basename (handles any absolute path) ---
-# `/opt/homebrew/bin/bash`, `/nix/store/.../bin/bash`, `/bin/bash` all
-# count as the shell `bash`. Without basename matching, the exec guard
-# only fires for paths in the hard-coded normalization list.
-# Strip a binary path prefix (/bin/, /sbin/, /usr/bin/, /usr/sbin/,
-# /usr/local/bin/) from the command-name token of CMD only — not from
-# any argument or operand. Walks past common runtime wrappers
-# (sudo/env/nice/...), VAR=val assignments, and flags to find the real
-# command-name position. The strip is a single in-place replacement of
-# the prefixed token, leaving the rest of CMD (including operands
-# that legitimately reference `/bin/<name>` as paths) untouched.
-#
-# Required because the previous "match whitespace before /bin/"
-# normalisation also matched the whitespace BEFORE every operand,
-# rewriting `rm /bin/sh` to `rm sh`, `tee /bin/owned` to `tee owned`,
-# etc., which then resolved into the project and bypassed the
-# boundary (Codex review on commit e01df86 — bypass A).
-strip_command_name_prefix() {
-  local cmd="$1"
-  local -a toks=()
-  while IFS= read -r t; do
-    [[ -z "$t" ]] && continue
-    toks+=("$t")
-  done < <(tokenize_args "$cmd")
+# strip_command_name_prefix moved to hooks/lib/command_name.sh.
 
-  local idx=-1 i
-  local prev_was_timeout=0
-  for i in "${!toks[@]}"; do
-    local raw="${toks[$i]}"
-    local t
-    t=$(strip_quotes "$raw")
-    # `timeout` takes a duration operand (e.g. `timeout 5 cmd`,
-    # `timeout 1.5s cmd`); skip one extra token after it.
-    if [ $prev_was_timeout -eq 1 ]; then
-      prev_was_timeout=0
-      case "$t" in
-        [0-9]*) continue ;;
-      esac
-    fi
-    case "$t" in
-      timeout)
-        prev_was_timeout=1; continue ;;
-      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
-        continue ;;
-    esac
-    case "$t" in
-      [A-Za-z_]*=*) continue ;;
-      -*) continue ;;
-    esac
-    idx=$i
-    break
-  done
+# strip_command_name_quotes moved to hooks/lib/command_name.sh.
 
-  [[ $idx -lt 0 ]] && { printf '%s' "$cmd"; return; }
+# command_name_is moved to hooks/lib/command_name.sh.
 
-  local first
-  first=$(strip_quotes "${toks[$idx]}")
-  case "$first" in
-    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) ;;
-    *) printf '%s' "$cmd"; return ;;
-  esac
+# is_discard_target moved to hooks/lib/paths.sh.
 
-  local cmdname="${first##*/}"
+# is_shell_token / is_source_token moved to hooks/lib/command_name.sh.
 
-  # Replace first occurrence of $first in $cmd with $cmdname.
-  # Pattern matching here treats $first verbatim (it cannot contain
-  # bash glob metacharacters in any realistic command-name position).
-  local prefix="${cmd%%${first}*}"
-  if [ "$prefix" = "$cmd" ]; then
-    printf '%s' "$cmd"; return
-  fi
-  local rest="${cmd:$((${#prefix} + ${#first}))}"
-  printf '%s%s%s' "$prefix" "$cmdname" "$rest"
-}
-
-strip_command_name_quotes() {
-  # If the command-name token of $1 is wrapped in matching single or
-  # double quotes (e.g. "rm", 'rm', "/bin/rm"), replace that token
-  # with its unquoted form so downstream detectors that match on bare
-  # names recognise it. bash strips surrounding quotes from a command
-  # word at exec time, so the quoted form invokes the same binary —
-  # failing to recognise it here would leak every bare-name detector
-  # (rm, mv, cp, ln, chmod, chown, tee, curl, wget, find, sed,
-  # truncate, rsync) past the guard. Walks tokens using the same
-  # wrapper / env-var / flag skipping rules as strip_command_name_prefix.
-  # Reported by Copilot review on commit 22112ba (guard.sh:1078, 1503).
-  local cmd="$1"
-  local -a toks=()
-  while IFS= read -r t; do
-    [[ -z "$t" ]] && continue
-    toks+=("$t")
-  done < <(tokenize_args "$cmd")
-
-  local idx=-1 i prev_was_timeout=0
-  for i in "${!toks[@]}"; do
-    local raw="${toks[$i]}"
-    local t
-    t=$(strip_quotes "$raw")
-    if [ $prev_was_timeout -eq 1 ]; then
-      prev_was_timeout=0
-      case "$t" in
-        [0-9]*) continue ;;
-      esac
-    fi
-    case "$t" in
-      timeout)
-        prev_was_timeout=1; continue ;;
-      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
-        continue ;;
-    esac
-    case "$t" in
-      [A-Za-z_]*=*) continue ;;
-      -*) continue ;;
-    esac
-    idx=$i
-    break
-  done
-
-  [[ $idx -lt 0 ]] && { printf '%s' "$cmd"; return; }
-
-  local raw="${toks[$idx]}"
-  # Only rewrite when the raw token is itself surrounded by matching
-  # single or double quotes — tokenize_args preserves the wrapping
-  # quote bytes on the token, so `"rm"` / `'rm'` / `"/bin/rm"` all
-  # match. Tokens without surrounding quotes (bare `rm` or
-  # partially-quoted like `"rm"abc`) are left alone.
-  case "$raw" in
-    \"?*\") ;;
-    \'?*\') ;;
-    *) printf '%s' "$cmd"; return ;;
-  esac
-
-  local bare="${raw:1:${#raw}-2}"
-
-  # Replace first occurrence of $raw in $cmd with $bare.
-  local prefix="${cmd%%${raw}*}"
-  if [ "$prefix" = "$cmd" ]; then
-    printf '%s' "$cmd"; return
-  fi
-  local rest="${cmd:$((${#prefix} + ${#raw}))}"
-  printf '%s%s%s' "$prefix" "$bare" "$rest"
-}
-
-command_name_is() {
-  # Return 0 iff the post-wrapper command-name token of $CMD equals $1.
-  # Walks $CMD tokens using the same rules as strip_command_name_prefix:
-  # skip `timeout <dur>`, sudo/env/nice/nohup/time/stdbuf/ionice/chrt/
-  # taskset/command/builtin/exec wrappers, VAR=val environment prefixes
-  # and -flag tokens. Any /bin/, /sbin/, /usr/bin/, /usr/sbin/,
-  # /usr/local/bin/ prefix on the command-name token is stripped before
-  # comparison, so `/usr/bin/install` is recognised as `install`.
-  #
-  # Why: several detectors (install, rsync, ...) use a bare
-  # `(^|[[:space:]])CMDNAME($|[[:space:]])` regex that matches the
-  # word anywhere in the command. For common names that are also
-  # package-manager subcommands (npm install / bundle install /
-  # poetry install / etc.) this produces false positives. Use this
-  # helper to require the actual command-name position.
-  local target=$1
-  local -a toks=()
-  while IFS= read -r t; do
-    [[ -z "$t" ]] && continue
-    toks+=("$t")
-  done < <(tokenize_args "$CMD")
-  local i prev_was_timeout=0
-  for i in "${!toks[@]}"; do
-    local raw="${toks[$i]}" t
-    t=$(strip_quotes "$raw")
-    if [ $prev_was_timeout -eq 1 ]; then
-      prev_was_timeout=0
-      case "$t" in
-        [0-9]*) continue ;;
-      esac
-    fi
-    case "$t" in
-      timeout)
-        prev_was_timeout=1; continue ;;
-      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
-        continue ;;
-    esac
-    case "$t" in
-      [A-Za-z_]*=*) continue ;;
-      -*) continue ;;
-    esac
-    case "$t" in
-      /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) t="${t##*/}" ;;
-    esac
-    [ "$t" = "$target" ]
-    return
-  done
-  return 1
-}
-
-is_discard_target() {
-  # Return 0 iff $1 is a POSIX bit-bucket write target whose bytes are
-  # guaranteed to be discarded with no real filesystem write.
-  #
-  # /dev/null is the canonical bit-bucket on every POSIX system
-  # (Linux, macOS, BSD) at the same path. Writes to it are accepted
-  # by the kernel and dropped — there is no filesystem target, no
-  # parent directory mutation, no symlink side-effect. Callers that
-  # KNOW they are writing a target (redirect operators, `tee`,
-  # `curl -o`, `wget -O`, `dd of=`) can short-circuit here before
-  # invoking is_write_permitted, so probe and silencing workflows
-  # like `curl -o /dev/null` and `2>/dev/null` don't require a
-  # per-project allowlist entry.
-  #
-  # IMPORTANT: this must NOT be used from call sites that do an
-  # in-place edit via temp-file + rename (`sed -i`, `truncate`) or
-  # from `cp/mv/ln/install/rsync` targets — those DO write under
-  # the parent directory of the nominal target (e.g. sed -i creates
-  # a temp file in /dev/ before renaming over /dev/null), and the
-  # boundary check must still fire there. See is_write_permitted
-  # docstring for the full separation of write semantics.
-  [ "$1" = "/dev/null" ]
-}
-
-is_shell_token() {
-  local _t="$1"
-  local _base="${_t##*/}"
-  case "$_base" in
-    bash|sh|zsh|ksh|dash|fish) return 0 ;;
-  esac
-  return 1
-}
-is_source_token() {
-  case "$1" in
-    source|.) return 0 ;;
-  esac
-  return 1
-}
-
-is_allowlisted() {
-  local path="$1"
-  local i=0 n=${#ALLOWLIST_REGEXES[@]}
-  while [ $i -lt $n ]; do
-    local regex="${ALLOWLIST_REGEXES[$i]}"
-    if [[ "$path" =~ $regex ]]; then
-      return 0
-    fi
-    local base_regex="${ALLOWLIST_BASE_REGEXES[$i]}"
-    if [ -n "$base_regex" ] && [[ "$path" =~ $base_regex ]]; then
-      return 0
-    fi
-    i=$((i+1))
-  done
-  return 1
-}
+# is_allowlisted moved to hooks/lib/paths.sh.
 
 # Check if the effective working directory is outside the project
 EFFECTIVE_CWD_RESOLVED=$(resolve_path "$EFFECTIVE_CWD")
@@ -475,80 +147,11 @@ if [[ "$EFFECTIVE_CWD_RESOLVED/" != "$PROJECT_DIR/"* ]]; then
   fi
 fi
 
-# --- Strip one layer of surrounding quotes (single or double) ---
-# Used before matching option flags like `-o` / `--output` against tokens,
-# since tokenize_args preserves quotes: `curl "-o" file` → token `"-o"`.
-strip_quotes() {
-  local p="$1"
-  if [[ "$p" == \"*\" ]]; then
-    p="${p#\"}"
-    p="${p%\"}"
-  elif [[ "$p" == \'*\' ]]; then
-    p="${p#\'}"
-    p="${p%\'}"
-  fi
-  printf '%s\n' "$p"
-}
+# strip_quotes moved to hooks/lib/tokenize.sh (sourced at top of file).
 
-# --- Expand ~ and $HOME in a command argument ---
-expand_path() {
-  local p="$1"
-  # Remove surrounding quotes (single or double)
-  p="${p%\"}"
-  p="${p#\"}"
-  p="${p%\'}"
-  p="${p#\'}"
-  # Expand ~ at start
-  if [[ "$p" == "~/"* ]]; then
-    p="$HOME/${p#\~/}"
-  elif [[ "$p" == "~" ]]; then
-    p="$HOME"
-  fi
-  # Expand $HOME
-  p="${p/\$HOME/$HOME}"
-  # Expand ${HOME}
-  p="${p/\$\{HOME\}/$HOME}"
-  printf '%s\n' "$p"
-}
+# expand_path moved to hooks/lib/paths.sh.
 
-# --- Quote-aware argument tokenizer ---
-# Splits a string into tokens respecting single and double quotes.
-# Tokens are newline-separated on stdout with quotes preserved (expand_path strips them).
-tokenize_args() {
-  local input="$1"
-  local -a tokens=()
-  local current=""
-  local in_sq=0 in_dq=0
-  local i=0 len=${#input}
-
-  while [ $i -lt $len ]; do
-    local ch="${input:$i:1}"
-
-    if [ "$ch" = "'" ] && [ $in_dq -eq 0 ]; then
-      in_sq=$(( 1 - in_sq ))
-      current="${current}${ch}"
-    elif [ "$ch" = '"' ] && [ $in_sq -eq 0 ]; then
-      in_dq=$(( 1 - in_dq ))
-      current="${current}${ch}"
-    elif { [ "$ch" = ' ' ] || [ "$ch" = $'\t' ]; } && [ $in_sq -eq 0 ] && [ $in_dq -eq 0 ]; then
-      if [ -n "$current" ]; then
-        tokens+=("$current")
-        current=""
-      fi
-    else
-      current="${current}${ch}"
-    fi
-    i=$((i + 1))
-  done
-
-  if [ -n "$current" ]; then
-    tokens+=("$current")
-  fi
-
-  for t in "${tokens[@]}"; do
-    printf '%s\n' "$t"
-  done
-}
+# tokenize_args moved to hooks/lib/tokenize.sh (sourced at top of file).
 
 # --- Extract all option values from CMD_TOKENS ---
 # Usage: extract_option_values <short> <long>
@@ -590,68 +193,7 @@ extract_option_values() {
   return $found
 }
 
-# --- Check if a resolved path is inside the project directory ---
-# STRICT: allowlist does NOT apply here. Use in destructive contexts where
-# the allowlist must not grant an exception: rm, chmod/chown, cd-outside,
-# find -delete/-exec rm, and executing a script file.
-is_inside_project() {
-  local resolved="$1"
-  # Add trailing slash to both sides so /tmp/project-other doesn't match /tmp/project
-  if [[ "$resolved/" == "$PROJECT_DIR/"* ]]; then
-    return 0
-  fi
-  return 1
-}
-
-# --- Check if a resolved path is a permitted WRITE target ---
-# Permitted = inside the project OR matches a write-allowlist pattern
-# (hooks/allowlist.conf). Use in write contexts: Edit/Write, redirect,
-# tee, cp/mv/ln/install/rsync targets, tar -C, unzip -d, cpio -D,
-# curl -o, wget -O, dd of=, sed -i, truncate.
-#
-# NOT for destructive ops (rm, chmod/chown, find -delete, cd+destructive,
-# script execution). The allowlist is a WRITE exception, not a general
-# boundary exception.
-is_write_permitted() {
-  local resolved="$1"
-
-  # Dereference leaf symlinks BEFORE the inside-project check. Without
-  # this, a symlink that lives inside the project but points outside
-  # is treated as in-project and every write-style Bash detector
-  # (tee, sed -i, truncate, curl -o, wget -O, dd of=) that funnels
-  # through this function lets the write land at the outside target.
-  # The Edit/Write tool branch already derefs upstream; this brings
-  # the Bash-side paths to parity (Copilot review on PR #12 / 7641a412).
-  # Loop limit + post-loop check fail-closed on circular chains.
-  local deref="$resolved"
-  local depth=20
-  while [[ -L "$deref" && $depth -gt 0 ]]; do
-    local link_target
-    link_target=$(readlink "$deref")
-    if [[ "$link_target" == /* ]]; then
-      deref=$(resolve_path "$link_target")
-    else
-      deref=$(resolve_path "$(dirname "$deref")/$link_target")
-    fi
-    depth=$((depth - 1))
-  done
-  if [[ -L "$deref" ]]; then
-    return 1
-  fi
-
-  if is_inside_project "$deref"; then
-    return 0
-  fi
-  if is_allowlisted "$deref"; then
-    # Allowlisted paths previously needed their own deref pass to avoid
-    # `ln -sf /etc/passwd memory/link && tee memory/link`. Now that the
-    # entry deref above already canonicalised the leaf, the allowlist
-    # check sees the ultimate OS-level path — same protection, no
-    # second loop needed.
-    return 0
-  fi
-  return 1
-}
+# is_inside_project / is_write_permitted moved to hooks/lib/paths.sh.
 
 # --- Edit/Write tool: check file_path boundary ---
 if [ -n "$FILE_PATH" ]; then
@@ -689,192 +231,7 @@ if [ -n "$FILE_PATH" ]; then
   exit 0
 fi
 
-# --- Blank out bodies of quoted/escaped heredocs for substitution scan ---
-# When bash reads a heredoc whose delimiter is quoted or backslash-escaped
-# (`<<'EOF'`, `<<"EOF"`, `<<\EOF`, `<<-'EOF'`), it does NOT perform
-# parameter/command/arithmetic expansion in the body. Backticks and
-# $(...) in such a body are therefore literal bytes written to stdin,
-# not command substitutions. The substitution detector further down
-# must not fire on those bytes, otherwise a legitimate
-#   cat > <allowlisted>/file <<'EOF'
-#   `echo hi`
-#   EOF
-# is wrongly blocked as "command substitution with backticks".
-#
-# This helper returns a copy of the input in which every quoted-heredoc
-# body is overwritten with spaces (newlines preserved so byte offsets
-# and line counts remain aligned). Unquoted heredoc bodies are left
-# untouched — bash DOES expand them, so substitution detection must
-# still fire there. Ambiguous / malformed input falls through to
-# returning the original (= fail closed on the main scan).
-#
-# Note: shell-stdin-heredoc blocking for `bash <<...` / `sh <<...` is
-# done elsewhere (shell_reads_from_stdin) on the original CMD and is
-# unaffected by this sanitization.
-blank_quoted_heredoc_bodies() {
-  local s="$1"
-  local n=${#s}
-  case "$s" in *"<<"*) ;; *) printf '%s' "$s"; return 0 ;; esac
-
-  # Build line index: LS[k]=start, LE[k]=offset of terminating '\n' (or n).
-  local -a LS=() LE=()
-  local i=0 ls=0
-  while [ $i -lt $n ]; do
-    if [ "${s:$i:1}" = $'\n' ]; then
-      LS+=("$ls"); LE+=("$i"); ls=$((i+1))
-    fi
-    i=$((i+1))
-  done
-  LS+=("$ls"); LE+=("$n")
-  local num_lines=${#LS[@]}
-
-  # Queue of pending heredocs: parallel arrays.
-  local -a HD=() HQ=() HI=() HB=()   # delim, quoted, indented(<<-), body_start
-  local -a BS=() BE=()               # ranges to blank: [BS[k], BE[k])
-
-  local li=0
-  while [ $li -lt $num_lines ]; do
-    local lstart=${LS[$li]} lend=${LE[$li]}
-    local line="${s:$lstart:$((lend-lstart))}"
-
-    if [ ${#HD[@]} -eq 0 ]; then
-      # Command context — scan for `<<` openers outside quotes.
-      local ci=0 clen=${#line} sq=0 dq=0 esc=0
-      while [ $ci -lt $clen ]; do
-        local c="${line:$ci:1}"
-        if [ $esc -eq 1 ]; then esc=0; ci=$((ci+1)); continue; fi
-        if [ "$c" = "\\" ] && [ $sq -eq 0 ]; then esc=1; ci=$((ci+1)); continue; fi
-        if [ "$c" = "'" ] && [ $dq -eq 0 ]; then sq=$((1-sq)); ci=$((ci+1)); continue; fi
-        if [ "$c" = '"' ] && [ $sq -eq 0 ]; then dq=$((1-dq)); ci=$((ci+1)); continue; fi
-        if [ $sq -eq 0 ] && [ $dq -eq 0 ] && [ "$c" = "<" ] && [ $((ci+1)) -lt $clen ] && [ "${line:$((ci+1)):1}" = "<" ]; then
-          # Skip `<<<` here-string — not a heredoc.
-          if [ $((ci+2)) -lt $clen ] && [ "${line:$((ci+2)):1}" = "<" ]; then
-            ci=$((ci+3)); continue
-          fi
-          local p=$((ci+2)) ind=0
-          if [ $p -lt $clen ] && [ "${line:$p:1}" = "-" ]; then ind=1; p=$((p+1)); fi
-          while [ $p -lt $clen ]; do
-            local ws="${line:$p:1}"
-            [ "$ws" = " " ] || [ "$ws" = $'\t' ] || break
-            p=$((p+1))
-          done
-          if [ $p -ge $clen ]; then
-            # Delimiter on next line — give up and return original (fail closed).
-            printf '%s' "$s"; return 0
-          fi
-          local f="${line:$p:1}" delim="" q=0 j=0
-          case "$f" in
-            "'")
-              j=$((p+1))
-              while [ $j -lt $clen ] && [ "${line:$j:1}" != "'" ]; do j=$((j+1)); done
-              if [ $j -ge $clen ]; then printf '%s' "$s"; return 0; fi
-              delim="${line:$((p+1)):$((j-p-1))}"; q=1; p=$((j+1)) ;;
-            '"')
-              j=$((p+1))
-              while [ $j -lt $clen ] && [ "${line:$j:1}" != '"' ]; do j=$((j+1)); done
-              if [ $j -ge $clen ]; then printf '%s' "$s"; return 0; fi
-              delim="${line:$((p+1)):$((j-p-1))}"; q=1; p=$((j+1)) ;;
-            "\\")
-              p=$((p+1)); j=$p
-              while [ $j -lt $clen ] && [[ "${line:$j:1}" =~ [A-Za-z0-9_.+:=,/@%^-] ]]; do j=$((j+1)); done
-              delim="${line:$p:$((j-p))}"; q=1; p=$j ;;
-            *)
-              j=$p
-              while [ $j -lt $clen ] && [[ "${line:$j:1}" =~ [A-Za-z0-9_.+:=,/@%^-] ]]; do j=$((j+1)); done
-              delim="${line:$p:$((j-p))}"; q=0; p=$j ;;
-          esac
-          if [ -z "$delim" ]; then printf '%s' "$s"; return 0; fi
-          HD+=("$delim"); HQ+=("$q"); HI+=("$ind"); HB+=("-1")
-          ci=$p; continue
-        fi
-        ci=$((ci+1))
-      done
-      # Only the queue HEAD's body starts on the line after this opener.
-      # Subsequent heredocs' bodies begin on the line AFTER their
-      # predecessor's terminator — we defer their body_start until the
-      # predecessor is popped (see the matching block in body context
-      # below). Previously we set body_start = lend+1 for every heredoc
-      # on this line, so a later quoted heredoc's blank range covered
-      # bytes belonging to an earlier unquoted body, hiding $(...) /
-      # backtick / $VAR in the unquoted body from fail-closed scans.
-      # Reported by Copilot review on commit aa6409b.
-      if [ ${#HB[@]} -gt 0 ] && [ "${HB[0]}" = "-1" ]; then
-        HB[0]=$((lend+1))
-        [ $li -eq $((num_lines-1)) ] && HB[0]=$n
-      fi
-    else
-      # Body context — check for terminator of queue head.
-      local hd="${HD[0]}" hq="${HQ[0]}" hi_flag="${HI[0]}" hbs="${HB[0]}"
-      local cmp="$line"
-      if [ "$hi_flag" = "1" ]; then
-        while [ ${#cmp} -gt 0 ] && [ "${cmp:0:1}" = $'\t' ]; do cmp="${cmp:1}"; done
-      fi
-      if [ "$cmp" = "$hd" ]; then
-        if [ "$hq" = "1" ] && [ "$hbs" != "-1" ] && [ $lstart -gt $hbs ]; then
-          BS+=("$hbs"); BE+=("$lstart")
-        fi
-        HD=("${HD[@]:1}"); HQ=("${HQ[@]:1}"); HI=("${HI[@]:1}"); HB=("${HB[@]:1}")
-        # The predecessor just popped; the next queue head's body starts
-        # on the line AFTER this terminator line. Matches the deferred
-        # body_start in the opener-context block above.
-        if [ ${#HD[@]} -gt 0 ] && [ "${HB[0]}" = "-1" ]; then
-          HB[0]=$((lend+1))
-          [ $li -eq $((num_lines-1)) ] && HB[0]=$n
-        fi
-      fi
-    fi
-    li=$((li+1))
-  done
-
-  # Any heredoc still open at EOF: blank remainder if quoted (tolerant of
-  # trailing newlines / missing terminator).
-  local qi=0
-  while [ $qi -lt ${#HD[@]} ]; do
-    if [ "${HQ[$qi]}" = "1" ] && [ "${HB[$qi]}" != "-1" ]; then
-      local hbs="${HB[$qi]}"
-      [ $n -gt $hbs ] && { BS+=("$hbs"); BE+=("$n"); }
-    fi
-    qi=$((qi+1))
-  done
-
-  if [ ${#BS[@]} -eq 0 ]; then printf '%s' "$s"; return 0; fi
-
-  # Emit output: copy bytes, replace blanked ranges with space.
-  # Newlines inside body ranges are preserved by default so byte
-  # offsets and line counts remain aligned for line-based scanners.
-  # Pass "blank_newlines" as the second arg to also replace body
-  # newlines with spaces — needed by split_and_check, which would
-  # otherwise treat a newline INSIDE a quoted heredoc body as a
-  # command separator and slice the heredoc into pseudo-subcommands.
-  local blank_nl="${2:-preserve}"
-  local out="" pos=0 bi=0 nb=${#BS[@]}
-  while [ $bi -lt $nb ]; do
-    local bs=${BS[$bi]} be=${BE[$bi]}
-    # In blank_newlines mode, also subsume the newline that immediately
-    # PRECEDES the body — that newline ends the heredoc opener line
-    # syntactically (it's not a command separator and not a body byte
-    # either). Without subsuming it, split_and_check would treat it as
-    # a real newline-separator and slice the heredoc opener away from
-    # its body, exposing the raw body to downstream walkers.
-    if [ "$blank_nl" = "blank_newlines" ] && [ $bs -gt 0 ] && [ "${s:$((bs-1)):1}" = $'\n' ]; then
-      bs=$((bs-1))
-    fi
-    if [ $pos -lt $bs ]; then out+="${s:$pos:$((bs-pos))}"; fi
-    local k=0 blen=$((be-bs))
-    while [ $k -lt $blen ]; do
-      local bc="${s:$((bs+k)):1}"
-      if [ "$bc" = $'\n' ] && [ "$blank_nl" != "blank_newlines" ]; then
-        out+=$'\n'
-      else
-        out+=" "
-      fi
-      k=$((k+1))
-    done
-    pos=$be; bi=$((bi+1))
-  done
-  if [ $pos -lt $n ]; then out+="${s:$pos:$((n-pos))}"; fi
-  printf '%s' "$out"
-}
+# blank_quoted_heredoc_bodies moved to hooks/lib/heredoc.sh.
 
 # --- Check a single (non-chained) command against all guards ---
 check_single_command() {
