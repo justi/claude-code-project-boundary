@@ -1,6 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
+# Load sibling library modules. Resolve this script's directory so the
+# source path works whether guard.sh is invoked directly, via symlink,
+# or through CLAUDE_PLUGIN_ROOT — we always load lib/ from next to the
+# current script file, not from $PWD or $CLAUDE_PLUGIN_ROOT which may
+# differ at invocation time.
+_GUARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/tokenize.sh
+source "$_GUARD_DIR/lib/tokenize.sh"
+
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
@@ -156,41 +165,7 @@ fi
 ALLOWLIST_REGEXES=()
 ALLOWLIST_BASE_REGEXES=()
 
-# --- Convert a glob pattern to an anchored regex ---
-# We can't rely on bash `[[ == ]]` + globstar because in that form `*`
-# matches `/` too (so `projects/*/memory` would also match
-# `projects/a/b/memory`). Custom translator enforces path-segment semantics:
-#   `**` matches any characters including `/`
-#   `*`  matches any characters EXCEPT `/`
-#   `?`  matches a single character except `/`
-#   other regex metachars are escaped to literals
-glob_to_regex() {
-  local g="$1"
-  local out=""
-  local i=0 n=${#g}
-  while [ $i -lt $n ]; do
-    local c="${g:$i:1}"
-    if [ "$c" = "*" ] && [ $((i + 1)) -lt $n ] && [ "${g:$((i + 1)):1}" = "*" ]; then
-      out="${out}.*"
-      i=$((i + 2))
-    elif [ "$c" = "*" ]; then
-      out="${out}[^/]*"
-      i=$((i + 1))
-    elif [ "$c" = "?" ]; then
-      out="${out}[^/]"
-      i=$((i + 1))
-    else
-      case "$c" in
-        .|+|\(|\)|\{|\}|\||\^|\$|\\|\[|\])
-          out="${out}\\${c}" ;;
-        *)
-          out="${out}${c}" ;;
-      esac
-      i=$((i + 1))
-    fi
-  done
-  printf '^%s$' "$out"
-}
+# glob_to_regex moved to hooks/lib/tokenize.sh (sourced at top of file).
 
 # --- Precompute allowlist regexes once at load time ---
 # is_allowlisted is invoked many times per command and many commands
@@ -475,20 +450,7 @@ if [[ "$EFFECTIVE_CWD_RESOLVED/" != "$PROJECT_DIR/"* ]]; then
   fi
 fi
 
-# --- Strip one layer of surrounding quotes (single or double) ---
-# Used before matching option flags like `-o` / `--output` against tokens,
-# since tokenize_args preserves quotes: `curl "-o" file` → token `"-o"`.
-strip_quotes() {
-  local p="$1"
-  if [[ "$p" == \"*\" ]]; then
-    p="${p#\"}"
-    p="${p%\"}"
-  elif [[ "$p" == \'*\' ]]; then
-    p="${p#\'}"
-    p="${p%\'}"
-  fi
-  printf '%s\n' "$p"
-}
+# strip_quotes moved to hooks/lib/tokenize.sh (sourced at top of file).
 
 # --- Expand ~ and $HOME in a command argument ---
 expand_path() {
@@ -511,44 +473,7 @@ expand_path() {
   printf '%s\n' "$p"
 }
 
-# --- Quote-aware argument tokenizer ---
-# Splits a string into tokens respecting single and double quotes.
-# Tokens are newline-separated on stdout with quotes preserved (expand_path strips them).
-tokenize_args() {
-  local input="$1"
-  local -a tokens=()
-  local current=""
-  local in_sq=0 in_dq=0
-  local i=0 len=${#input}
-
-  while [ $i -lt $len ]; do
-    local ch="${input:$i:1}"
-
-    if [ "$ch" = "'" ] && [ $in_dq -eq 0 ]; then
-      in_sq=$(( 1 - in_sq ))
-      current="${current}${ch}"
-    elif [ "$ch" = '"' ] && [ $in_sq -eq 0 ]; then
-      in_dq=$(( 1 - in_dq ))
-      current="${current}${ch}"
-    elif { [ "$ch" = ' ' ] || [ "$ch" = $'\t' ]; } && [ $in_sq -eq 0 ] && [ $in_dq -eq 0 ]; then
-      if [ -n "$current" ]; then
-        tokens+=("$current")
-        current=""
-      fi
-    else
-      current="${current}${ch}"
-    fi
-    i=$((i + 1))
-  done
-
-  if [ -n "$current" ]; then
-    tokens+=("$current")
-  fi
-
-  for t in "${tokens[@]}"; do
-    printf '%s\n' "$t"
-  done
-}
+# tokenize_args moved to hooks/lib/tokenize.sh (sourced at top of file).
 
 # --- Extract all option values from CMD_TOKENS ---
 # Usage: extract_option_values <short> <long>
