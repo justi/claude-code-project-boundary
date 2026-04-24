@@ -31,6 +31,8 @@ source "$_GUARD_DIR/lib/paths.sh"
 source "$_GUARD_DIR/lib/heredoc.sh"
 # shellcheck source=lib/detectors/inplace.sh
 source "$_GUARD_DIR/lib/detectors/inplace.sh"
+# shellcheck source=lib/detectors/destructive.sh
+source "$_GUARD_DIR/lib/detectors/destructive.sh"
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
@@ -893,175 +895,9 @@ check_single_command() {
     fi
   fi
 
-  # --- xargs with dangerous commands ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])xargs($|[[:space:]])'; then
-    # Check if xargs is followed by a dangerous command
-    local xargs_cmd
-    xargs_cmd=$(echo "$CMD" | sed -E 's/.*xargs[[:space:]]+((-[^ ]*[[:space:]]+)*)//' | awk '{print $1}')
-    case "$xargs_cmd" in
-      rm|mv|cp|chmod|chown|tee|ln)
-        echo "BLOCKED: 'xargs $xargs_cmd' is blocked because xargs arguments cannot be validated. Ask user for explicit permission." >&2
-        exit 2
-        ;;
-    esac
-  fi
+  # xargs, find-delete, rm, mv, cp, ln moved to hooks/lib/detectors/destructive.sh.
+  run_destructive_detectors
 
-  # --- find with -delete or -exec rm/mv outside project ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])find($|[[:space:]])'; then
-    if echo "$CMD" | grep -qE '(-delete|-exec[[:space:]]+(rm|mv))'; then
-      # Extract ALL find paths (non-option arguments after 'find')
-      # Skip options like -L, -H, -P that come before the paths
-      local -a find_paths=()
-      local find_args
-      find_args=$(echo "$CMD" | sed -E 's/.*find[[:space:]]+//')
-      local past_options=0
-      while IFS= read -r find_token; do
-        [[ -z "$find_token" ]] && continue
-        case "$find_token" in
-          -L|-H|-P|-O*)
-            [[ $past_options -eq 0 ]] && continue
-            break ;;  # expression starts
-          -*)  break ;;  # expression starts
-          *)
-            past_options=1
-            find_paths+=("$find_token") ;;
-        esac
-      done < <(tokenize_args "$find_args")
-      [[ ${#find_paths[@]} -eq 0 ]] && find_paths=(".")
-      for find_path in "${find_paths[@]}"; do
-        find_path=$(expand_path "$find_path")
-        if [[ "$find_path" != /* ]]; then
-          find_path="$EFFECTIVE_CWD/$find_path"
-        fi
-        local resolved_find
-        resolved_find=$(resolve_path "$find_path")
-        # STRICT: find -delete/-exec rm are destructive; allowlist must not apply.
-        if ! is_inside_project "$resolved_find"; then
-          echo "BLOCKED: 'find' with destructive action targets '$resolved_find' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      done
-    fi
-  fi
-
-  # --- File deletion: allowed inside project, blocked outside ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])rm($|[[:space:]])'; then
-    # Extract paths from rm command (skip flags)
-    local rm_raw
-    rm_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rm[[:space:]]+.*' | sed 's/^[[:space:]]*rm[[:space:]]*//')
-
-    while IFS= read -r TARGET; do
-      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
-      TARGET=$(expand_path "$TARGET")
-      # Resolve to absolute path
-      if [[ "$TARGET" != /* ]]; then
-        TARGET="$EFFECTIVE_CWD/$TARGET"
-      fi
-      RESOLVED=$(resolve_path "$TARGET")
-
-      # STRICT: rm is destructive; allowlist grants WRITE, not DELETE.
-      if ! is_inside_project "$RESOLVED"; then
-        echo "BLOCKED: 'rm' targets '$RESOLVED' which is OUTSIDE project directory '$PROJECT_DIR'. File deletion is only allowed within the project. Ask user for explicit permission." >&2
-        exit 2
-      fi
-
-      # Block deleting the project root itself
-      if [[ "$RESOLVED" == "$PROJECT_DIR" ]]; then
-        echo "BLOCKED: Cannot delete the project root directory itself." >&2
-        exit 2
-      fi
-    done < <(tokenize_args "$rm_raw")
-  fi
-
-  # --- Moving files outside project ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])mv($|[[:space:]])'; then
-    # Check -t / --target-directory
-    while IFS= read -r mv_target_dir; do
-      [ -z "$mv_target_dir" ] && continue
-      mv_target_dir=$(expand_path "$mv_target_dir")
-      [[ "$mv_target_dir" != /* ]] && mv_target_dir="$EFFECTIVE_CWD/$mv_target_dir"
-      local resolved_mv_td
-      resolved_mv_td=$(resolve_path "$mv_target_dir")
-      # STRICT: mv with -t still deletes sources from their original paths.
-      # Allowing an allowlisted dir as dest could pair with an outside-project
-      # source (caught by the per-arg strict loop below) — keep both ends tight.
-      if ! is_inside_project "$resolved_mv_td"; then
-        echo "BLOCKED: 'mv --target-directory' targets '$resolved_mv_td' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
-    done < <(extract_option_values "-t" "--target-directory" || true)
-    local mv_raw
-    mv_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])mv[[:space:]]+.*' | sed 's/^[[:space:]]*mv[[:space:]]*//')
-
-    while IFS= read -r TARGET; do
-      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
-      TARGET=$(expand_path "$TARGET")
-      if [[ "$TARGET" != /* ]]; then
-        TARGET="$EFFECTIVE_CWD/$TARGET"
-      fi
-      RESOLVED=$(resolve_path "$TARGET")
-
-      # STRICT: mv deletes the source; allowlist must not apply, otherwise
-      # `mv memory/foo project/foo` would destructively empty the memory dir
-      # (allowlist grants WRITE, not move/delete).
-      if ! is_inside_project "$RESOLVED"; then
-        echo "BLOCKED: 'mv' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
-    done < <(tokenize_args "$mv_raw")
-  fi
-
-  # --- cp command: check all non-flag arguments ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])cp($|[[:space:]])'; then
-    # Check -t / --target-directory
-    while IFS= read -r cp_target_dir; do
-      [ -z "$cp_target_dir" ] && continue
-      cp_target_dir=$(expand_path "$cp_target_dir")
-      [[ "$cp_target_dir" != /* ]] && cp_target_dir="$EFFECTIVE_CWD/$cp_target_dir"
-      local resolved_cp_td
-      resolved_cp_td=$(resolve_path "$cp_target_dir")
-      if ! is_inside_project "$resolved_cp_td"; then
-        echo "BLOCKED: 'cp --target-directory' targets '$resolved_cp_td' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
-    done < <(extract_option_values "-t" "--target-directory" || true)
-    local cp_raw
-    cp_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])cp[[:space:]]+.*' | sed 's/^[[:space:]]*cp[[:space:]]*//')
-
-    while IFS= read -r TARGET; do
-      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
-      TARGET=$(expand_path "$TARGET")
-      if [[ "$TARGET" != /* ]]; then
-        TARGET="$EFFECTIVE_CWD/$TARGET"
-      fi
-      RESOLVED=$(resolve_path "$TARGET")
-
-      if ! is_inside_project "$RESOLVED"; then
-        echo "BLOCKED: 'cp' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
-    done < <(tokenize_args "$cp_raw")
-  fi
-
-  # --- ln command: check all non-flag arguments ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])ln($|[[:space:]])'; then
-    local ln_raw
-    ln_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])ln[[:space:]]+.*' | sed 's/^[[:space:]]*ln[[:space:]]*//')
-
-    while IFS= read -r TARGET; do
-      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
-      TARGET=$(expand_path "$TARGET")
-      if [[ "$TARGET" != /* ]]; then
-        TARGET="$EFFECTIVE_CWD/$TARGET"
-      fi
-      RESOLVED=$(resolve_path "$TARGET")
-
-      if ! is_inside_project "$RESOLVED"; then
-        echo "BLOCKED: 'ln' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
-    done < <(tokenize_args "$ln_raw")
-  fi
 
   # --- install command: like cp, check all non-flag path arguments ---
   # Must be tokenize-aware: the word `install` appears as a subcommand
