@@ -87,7 +87,7 @@ split_and_check() {
   local in_double_quote=0
   local i=0
   local len=${#full_cmd}
-  local ch prev_ch=""
+  local ch
 
   # Use a heredoc-blanked copy to detect operator positions. Quoted
   # heredoc bodies (`<<'EOF'` / `<<"EOF"` / `<<\EOF`) get spaces in
@@ -117,7 +117,6 @@ split_and_check() {
         in_single_quote=0
       fi
       current="${current}${raw_ch}"
-      prev_ch="$ch"
       i=$((i + 1))
       continue
     fi
@@ -129,7 +128,6 @@ split_and_check() {
         in_double_quote=0
       fi
       current="${current}${raw_ch}"
-      prev_ch="$ch"
       i=$((i + 1))
       continue
     fi
@@ -143,7 +141,6 @@ split_and_check() {
           subcmds+=("$current")
           current=""
           i=$((i + 2))
-          prev_ch=""
           continue
         fi
       fi
@@ -152,20 +149,16 @@ split_and_check() {
       # terminators. Without splitting on newline, a multi-line command
       # like `echo ok\nbash /tmp/evil.sh` reaches every "first-token"
       # detector as a single subcommand whose name is `echo`, hiding
-      # the script-execute on the second line. scan_cmd has heredoc
-      # body bytes blanked (with newlines preserved), but body
-      # newlines were never command separators in bash anyway — they
-      # are part of the heredoc payload. The split here uses scan_cmd,
-      # so a newline INSIDE a quoted heredoc body is still a blanked
-      # space-equivalent (no, actually preserved newlines per the
-      # helper) but the surrounding heredoc terminator/delimiter
-      # parsing keeps the body single-subcommand because the
-      # tokenizer downstream re-reads CMD verbatim. In practice: split
-      # on newlines outside quotes / heredoc bodies.
+      # the script-execute on the second line. scan_cmd was built with
+      # the blank_newlines flag, so newlines inside a quoted heredoc
+      # body have already been replaced with spaces (the flag also
+      # subsumes the newline immediately before each body). Any
+      # newline still visible in scan_cmd at this point is therefore
+      # outside every heredoc body, and bash would treat it as a
+      # command separator — we do the same.
       if [ "$ch" = ";" ] || [ "$ch" = $'\n' ]; then
         subcmds+=("$current")
         current=""
-        prev_ch="$ch"
         i=$((i + 1))
         continue
       fi
@@ -177,20 +170,17 @@ split_and_check() {
         if [[ "$trimmed" == *\> ]]; then
           # Part of >| or >>| — keep it as a redirect operator, not a pipe
           current="${current}${raw_ch}"
-          prev_ch="$ch"
           i=$((i + 1))
           continue
         fi
         subcmds+=("$current")
         current=""
-        prev_ch="$ch"
         i=$((i + 1))
         continue
       fi
     fi
 
     current="${current}${raw_ch}"
-    prev_ch="$ch"
     i=$((i + 1))
   done
 

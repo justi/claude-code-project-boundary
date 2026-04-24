@@ -72,7 +72,7 @@ run_destructive_detectors() {
   if echo "$CMD" | grep -qE '(^|[[:space:]])rm($|[[:space:]])'; then
     # Extract paths from rm command (skip flags)
     local rm_raw
-    rm_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rm[[:space:]]+.*' | sed 's/^[[:space:]]*rm[[:space:]]*//')
+    rm_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rm[[:space:]]+.*' | sed 's/^[[:space:]]*rm[[:space:]]*//' || true)
 
     local TARGET RESOLVED
     while IFS= read -r TARGET; do
@@ -117,7 +117,7 @@ run_destructive_detectors() {
       fi
     done < <(extract_option_values "-t" "--target-directory" || true)
     local mv_raw
-    mv_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])mv[[:space:]]+.*' | sed 's/^[[:space:]]*mv[[:space:]]*//')
+    mv_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])mv[[:space:]]+.*' | sed 's/^[[:space:]]*mv[[:space:]]*//' || true)
 
     local TARGET RESOLVED
     while IFS= read -r TARGET; do
@@ -154,7 +154,7 @@ run_destructive_detectors() {
       fi
     done < <(extract_option_values "-t" "--target-directory" || true)
     local cp_raw
-    cp_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])cp[[:space:]]+.*' | sed 's/^[[:space:]]*cp[[:space:]]*//')
+    cp_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])cp[[:space:]]+.*' | sed 's/^[[:space:]]*cp[[:space:]]*//' || true)
 
     local TARGET RESOLVED
     while IFS= read -r TARGET; do
@@ -175,7 +175,7 @@ run_destructive_detectors() {
   # --- ln command: check all non-flag arguments ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])ln($|[[:space:]])'; then
     local ln_raw
-    ln_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])ln[[:space:]]+.*' | sed 's/^[[:space:]]*ln[[:space:]]*//')
+    ln_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])ln[[:space:]]+.*' | sed 's/^[[:space:]]*ln[[:space:]]*//' || true)
 
     local TARGET RESOLVED
     while IFS= read -r TARGET; do
@@ -208,7 +208,7 @@ run_permissions_detectors() {
       # Extract args after command name, skip flags, then skip the first
       # non-flag token (mode for chmod, owner[:group] for chown)
       local perm_raw
-      perm_raw=$(echo "$CMD" | grep -oE "(^|[[:space:]])${CMD_NAME}[[:space:]]+.*" | sed "s/^[[:space:]]*${CMD_NAME}[[:space:]]*//")
+      perm_raw=$(echo "$CMD" | grep -oE "(^|[[:space:]])${CMD_NAME}[[:space:]]+.*" | sed "s/^[[:space:]]*${CMD_NAME}[[:space:]]*//" || true)
       local skipped_first=0
 
       while IFS= read -r TARGET; do

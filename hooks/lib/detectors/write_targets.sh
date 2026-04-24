@@ -1,23 +1,29 @@
 #!/bin/bash
 # project-boundary guard — detectors: write targets
 # ==================================================
-# Boundary checks for commands whose write semantics let the
-# allowlist apply (is_write_permitted) rather than requiring strict
-# in-project writes: install, rsync, tar -C extraction dirs,
-# unzip -d, cpio -D, tee, curl -o / --output, wget -O /
-# --output-document, dd of=, and the general Bash redirect walker.
+# Boundary checks for commands whose write semantics this cluster
+# evaluates. Two different checks are used depending on the command:
 #
-# Five of these also short-circuit via is_discard_target when the
-# resolved target is the POSIX bit-bucket (/dev/null) — redirect,
-# tee, curl, wget, dd. The other four (install, rsync, tar, unzip,
-# cpio) always go through is_write_permitted because they perform
-# real filesystem writes.
+#   STRICT (is_inside_project, allowlist does NOT apply):
+#     install, rsync — both perform real filesystem writes AND
+#     can be pointed at outside-project destinations explicitly;
+#     allowlist would let them write to ~/.claude/**/memory from
+#     arbitrary sources, which is not the intended use.
 #
-# Dispatched from hooks/guard.sh check_single_command; dynamic scope
-# provides: CMD, CMD_TOKENS, CMD_TOKENS_SCAN, EFFECTIVE_CWD,
+#   WRITE-PERMITTED (is_write_permitted, allowlist applies):
+#     tar -C, unzip -d, cpio -D, tee, curl -o / --output,
+#     wget -O / --output-document, dd of=, Bash redirect walker
+#
+# The five write-permitted detectors that accept a single target
+# path (redirect, tee, curl, wget, dd) short-circuit via
+# is_discard_target when the resolved target is the POSIX
+# bit-bucket (/dev/null).
+#
+# Dispatched from hooks/guard.sh check_single_command; dynamic
+# scope provides: CMD, CMD_TOKENS, CMD_TOKENS_SCAN, EFFECTIVE_CWD,
 # PROJECT_DIR, plus helpers from hooks/lib/tokenize.sh +
-# hooks/lib/paths.sh + hooks/lib/command_name.sh + guard.sh's
-# extract_option_values.
+# hooks/lib/paths.sh + hooks/lib/command_name.sh +
+# extract_option_values from hooks/lib/options.sh.
 #
 # Each detector calls `exit 2` on a boundary violation.
 
@@ -32,7 +38,7 @@ run_write_target_detectors() {
   # is the actual command-name token.
   if command_name_is install; then
     local install_raw
-    install_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//')
+    install_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//' || true)
     # Skip mode arg (numeric, after -m/--mode), owner arg (after -o), group (after -g)
     while IFS= read -r TARGET; do
       [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
@@ -55,7 +61,7 @@ run_write_target_detectors() {
   # --- rsync command: check all non-flag path arguments ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])rsync($|[[:space:]])'; then
     local rsync_raw
-    rsync_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//')
+    rsync_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//' || true)
     while IFS= read -r TARGET; do
       [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
       # Skip remote paths (user@host:/path or host:/path)
@@ -151,7 +157,7 @@ run_write_target_detectors() {
   # --- tee command: extract file arguments, block if outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])tee($|[[:space:]])'; then
     local tee_raw
-    tee_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])tee[[:space:]]+.*' | sed 's/^[[:space:]]*tee[[:space:]]*//')
+    tee_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])tee[[:space:]]+.*' | sed 's/^[[:space:]]*tee[[:space:]]*//' || true)
 
     while IFS= read -r TARGET; do
       [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
