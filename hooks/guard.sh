@@ -2,11 +2,25 @@
 set -euo pipefail
 
 # Load sibling library modules. Resolve this script's directory so the
-# source path works whether guard.sh is invoked directly, via symlink,
-# or through CLAUDE_PLUGIN_ROOT — we always load lib/ from next to the
-# current script file, not from $PWD or $CLAUDE_PLUGIN_ROOT which may
-# differ at invocation time.
-_GUARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# source path works whether guard.sh is invoked directly, through a
+# symlink to the script itself, or through a CLAUDE_PLUGIN_ROOT that
+# differs from $PWD. A plain `dirname "${BASH_SOURCE[0]}"` would
+# return the SYMLINK's directory when guard.sh itself is symlinked
+# (e.g. installed as `/some/path/link/guard.sh -> /real/hooks/guard.sh`),
+# so the sourced `lib/` siblings would be looked up in the wrong
+# directory. Chase the symlink chain to the real file before taking
+# its directory. Portable across Linux and macOS (no `readlink -f`
+# dependency). Reported by Copilot review on PR #15.
+_guard_source="${BASH_SOURCE[0]}"
+while [ -L "$_guard_source" ]; do
+  _guard_target="$(readlink "$_guard_source")"
+  case "$_guard_target" in
+    /*) _guard_source="$_guard_target" ;;
+    *)  _guard_source="$(dirname "$_guard_source")/$_guard_target" ;;
+  esac
+done
+_GUARD_DIR="$(cd "$(dirname "$_guard_source")" && pwd)"
+unset _guard_source _guard_target
 # shellcheck source=lib/tokenize.sh
 source "$_GUARD_DIR/lib/tokenize.sh"
 # shellcheck source=lib/command_name.sh
