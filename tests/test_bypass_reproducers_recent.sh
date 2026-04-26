@@ -532,3 +532,54 @@ expect_allowed "rsync --version (long flag before --)" \
   "rsync --version"
 
 echo ""
+
+# ============================================================
+# 24. install detector ignores POSIX `--` end-of-options
+# ------------------------------------------------------------
+# The install path-walker uses the same `[[ "$TARGET" == -* ]] &&
+# continue` flag-skip pattern as rsync had before section 23. After
+# `--`, every token is a positional operand even when its name
+# begins with `-`. So a file operand like `-owned` slips past the
+# boundary check.
+#
+# Other write/destructive walkers (tee / rm / mv / cp / ln) carry
+# the same code shape but are NOT exploitable via this path: the
+# cd-outside-chain destructive gate fires earlier and blocks them
+# wholesale ("Destructive command outside project directory")
+# before their per-arg walker runs. install is classified as a
+# write tool, not destructive, so it passes that earlier gate and
+# the walker bug becomes the boundary.
+#
+# Same bug class as the rsync POSIX `--` bypass closed in section
+# 23 of this branch.
+#
+# Reported by Copilot review on commit c4a70e0
+# (write_targets.sh:67).
+# ============================================================
+echo "--- 24. install ignores POSIX -- end-of-options ---"
+
+expect_blocked_cwd "install src -- -owned (cwd=/tmp)" \
+  "install $PROJECT/CHANGELOG.md -- -owned" \
+  "/tmp"
+
+expect_blocked_cwd "install -m 0755 src -- -dash_dest (cwd=/tmp)" \
+  "install -m 0755 $PROJECT/CHANGELOG.md -- -dash_dest" \
+  "/tmp"
+
+expect_blocked_cwd "install -- -src -dest (both operands dash-prefixed)" \
+  "install -- -src -dest" \
+  "/tmp"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - install without -- (current flag-skip behaviour preserved)
+# - install -- src dest with non-dash operands in project
+expect_allowed "install src dest (no --, in project)" \
+  "install $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "install -- src dest (-- with normal operands, in project)" \
+  "install -- $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "install --help (long flag before --)" \
+  "install --help"
+
+echo ""
