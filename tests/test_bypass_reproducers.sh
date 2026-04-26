@@ -958,3 +958,72 @@ expect_allowed "echo 'rm /etc/x' (rm inside a string literal, no exec)" \
   "echo 'rm /etc/x'"
 
 echo ""
+
+# ============================================================
+# 22. install detector unconditionally skips mode/user_group tokens
+# ------------------------------------------------------------
+# install's path-walker tries to "skip" the value of -m/-o/-g flags
+# by matching every token against:
+#     ^[0-9]+$                               (mode)
+#     ^[a-zA-Z_][a-zA-Z0-9_]*(:user)?$       (owner[:group])
+# but applies the skip UNCONDITIONALLY — to every token, not just
+# the one immediately following -m/--mode/-o/--owner/-g/--group.
+#
+# Bash semantics: install grammar puts mode/owner/group ONLY as the
+# value of their respective flag. A bare positional token like
+# "0755", "root", or "root_wheel" is a SOURCE or DEST file name.
+#
+# Concrete attack: when EFFECTIVE_CWD sits outside the project
+# (event_cwd or `cd /tmp && ...`), an install destination whose
+# bare name happens to match the mode or user_group regex slips
+# past the boundary check. The guard never resolves it; the actual
+# write lands at <outside_cwd>/<name>.
+#
+# Reported by Copilot review on commit b6de687
+# (write_targets.sh:47).
+# ============================================================
+echo "--- 22. install dest matching mode/user_group regex bypass ---"
+
+expect_blocked_cwd "install src DEST=1234 (mode regex bypass, cwd=/tmp)" \
+  "install $PROJECT/CHANGELOG.md 1234" \
+  "/tmp"
+
+expect_blocked_cwd "install src DEST=root (user_group regex bypass, cwd=/tmp)" \
+  "install $PROJECT/CHANGELOG.md root" \
+  "/tmp"
+
+expect_blocked_cwd "install src DEST=root_wheel (alphanumeric name bypass, cwd=/tmp)" \
+  "install $PROJECT/CHANGELOG.md root_wheel" \
+  "/tmp"
+
+expect_blocked_cwd "install src DEST=user:wheel (user:group bypass, cwd=/tmp)" \
+  "install $PROJECT/CHANGELOG.md user:wheel" \
+  "/tmp"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - install -m 0755 src dest (mode value AFTER -m must still be skipped)
+# - install -o root -g wheel src dest (owner/group values after their flags)
+# - install with attached --mode=VALUE / --owner=VALUE / --group=VALUE
+# - bare install with no args (no abort under set -euo pipefail)
+expect_allowed "install -m 0755 src dest (mode value after -m, in project)" \
+  "install -m 0755 $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "install -o root src dest (owner value after -o, in project)" \
+  "install -o root $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "install -g wheel src dest (group value after -g, in project)" \
+  "install -g wheel $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "install --mode=0755 src dest (attached mode)" \
+  "install --mode=0755 $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "install --owner=root src dest (attached owner)" \
+  "install --owner=root $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "install --group=wheel src dest (attached group)" \
+  "install --group=wheel $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "install -m 0755 -o root -g wheel src dest (all flags combined)" \
+  "install -m 0755 -o root -g wheel $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+echo ""
