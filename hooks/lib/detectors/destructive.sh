@@ -9,8 +9,8 @@
 #
 # Dispatched from hooks/guard.sh check_single_command; dynamic scope
 # provides: CMD, EFFECTIVE_CWD, PROJECT_DIR, helpers from
-# hooks/lib/tokenize.sh + hooks/lib/paths.sh + guard.sh's
-# extract_option_values.
+# hooks/lib/tokenize.sh + hooks/lib/paths.sh +
+# extract_option_values from hooks/lib/options.sh.
 #
 # Each detector calls `exit 2` on a boundary violation.
 
