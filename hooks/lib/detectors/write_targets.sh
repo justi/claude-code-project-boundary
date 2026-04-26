@@ -66,29 +66,17 @@ run_write_target_detectors() {
         continue
       fi
       [[ -z "$TARGET" ]] && continue
-      # Always normalize via strip_quotes so the flag tests work
-      # whether the caller wrote `--help` or `"--help"` — bash
-      # strips surrounding quotes from a command word at exec time.
-      # Three cases on the stripped token, in order:
-      #
-      #   (a) literal `--` terminator → set install_seen_dashdash
-      #   (b) attached path-bearing option `--name=PATH` (where
-      #       PATH contains `/`) → extract PATH and validate; this
-      #       catches both quoted and unquoted forms of options
-      #       like `--target-directory=/tmp/out` whose value would
-      #       otherwise slip past the flag-skip case
-      #   (c) plain flag (no `=` or attached non-path value) →
-      #       skip; flags from the (-m / --mode / -o / --owner /
-      #       -g / --group) set also flip install_skip_next so the
-      #       next token (their value) is consumed without
-      #       validation
-      #
-      # Iterations: ce011af stripped quotes for every flag test
-      # (P1 — quoted attached path-options bypassed); bb9e2c3
-      # stopped stripping for the flag-skip (P2 — quoted plain
-      # flags wrongly blocked from outside cwd). This commit
-      # combines: strip for the comparison, but route attached
-      # `=PATH` values through validation regardless.
+      # Strip quotes for every flag test so `"--help"` and `--help`
+      # behave identically (bash strips quotes at exec time). For
+      # the attached form `--name=value` the walker only validates
+      # the value when name is on the WHITE-LIST of options that
+      # actually point at a write target — currently
+      # `--target-directory=`. All other -* tokens (including
+      # `--exclude=`, `--rsync-path=`, `--mode=`, etc.) are skipped
+      # as flags. The white-list approach replaced an earlier
+      # `=*/*` heuristic that both missed relative values and
+      # over-matched benign options carrying `/` (Codex review on
+      # commit f76ec34, write_targets.sh:100 + 161).
       if [ $install_seen_dashdash -eq 0 ]; then
         local install_tok
         install_tok=$(strip_quotes "$TARGET")
@@ -97,7 +85,7 @@ run_write_target_detectors() {
           continue
         fi
         if [[ "$install_tok" == -* ]]; then
-          if [[ "$install_tok" == *=*/* ]]; then
+          if [[ "$install_tok" == --target-directory=* ]]; then
             local install_attached_val="${install_tok#*=}"
             install_attached_val=$(expand_path "$install_attached_val")
             if [[ "$install_attached_val" != /* ]]; then
@@ -106,7 +94,7 @@ run_write_target_detectors() {
             local install_attached_resolved
             install_attached_resolved=$(resolve_path "$install_attached_val")
             if ! is_inside_project "$install_attached_resolved"; then
-              echo "BLOCKED: 'install' attached-option value '$install_attached_resolved' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+              echo "BLOCKED: 'install --target-directory' targets '$install_attached_resolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
               exit 2
             fi
             continue
@@ -146,11 +134,17 @@ run_write_target_detectors() {
     while IFS= read -r TARGET; do
       [[ -z "$TARGET" ]] && continue
       if [ $rsync_seen_dashdash -eq 0 ]; then
-        # Same shape as the install walker above. Always normalize
-        # via strip_quotes for the flag tests; route attached
-        # `=PATH` values through path validation so neither quoted
-        # nor unquoted `--log-file=/tmp/log` /
-        # `--partial-dir=/tmp/p` / etc. slip past the boundary.
+        # Same white-list approach as the install walker. The
+        # attached options that actually point at a filesystem
+        # write target are --log-file= (writes the run log),
+        # --partial-dir= (writes partial transfers),
+        # --backup-dir= (writes backups before overwrite), and
+        # --temp-dir= (writes scratch files during transfer).
+        # Other slash-bearing options like --exclude=PATTERN,
+        # --rsync-path=REMOTE_BIN, and the read-only --*-from=
+        # filter file flags are skipped as ordinary flags so the
+        # detector does not over-match (Codex review on commit
+        # f76ec34, write_targets.sh:161).
         local rsync_tok
         rsync_tok=$(strip_quotes "$TARGET")
         if [ "$rsync_tok" = "--" ]; then
@@ -158,19 +152,21 @@ run_write_target_detectors() {
           continue
         fi
         if [[ "$rsync_tok" == -* ]]; then
-          if [[ "$rsync_tok" == *=*/* ]]; then
-            local rsync_attached_val="${rsync_tok#*=}"
-            rsync_attached_val=$(expand_path "$rsync_attached_val")
-            if [[ "$rsync_attached_val" != /* ]]; then
-              rsync_attached_val="$EFFECTIVE_CWD/$rsync_attached_val"
-            fi
-            local rsync_attached_resolved
-            rsync_attached_resolved=$(resolve_path "$rsync_attached_val")
-            if ! is_inside_project "$rsync_attached_resolved"; then
-              echo "BLOCKED: 'rsync' attached-option value '$rsync_attached_resolved' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-              exit 2
-            fi
-          fi
+          case "$rsync_tok" in
+            --log-file=*|--partial-dir=*|--backup-dir=*|--temp-dir=*)
+              local rsync_attached_val="${rsync_tok#*=}"
+              rsync_attached_val=$(expand_path "$rsync_attached_val")
+              if [[ "$rsync_attached_val" != /* ]]; then
+                rsync_attached_val="$EFFECTIVE_CWD/$rsync_attached_val"
+              fi
+              local rsync_attached_resolved
+              rsync_attached_resolved=$(resolve_path "$rsync_attached_val")
+              if ! is_inside_project "$rsync_attached_resolved"; then
+                echo "BLOCKED: 'rsync ${rsync_tok%%=*}' targets '$rsync_attached_resolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+                exit 2
+              fi
+              ;;
+          esac
           continue
         fi
       fi

@@ -687,4 +687,27 @@ expect_allowed_cwd "install --owner=root src dst (attached non-path value)" \
   "install --owner=root $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
   "/tmp"
 
+# Relative attached values must also be blocked (resolve under cwd):
+expect_blocked_cwd "install --target-directory=out src (relative value, cwd=/tmp)" \
+  "install --target-directory=out $PROJECT/CHANGELOG.md" \
+  "/tmp"
+
+expect_blocked_cwd "rsync --log-file=log.txt src dst (relative value, cwd=/tmp)" \
+  "rsync --log-file=log.txt $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+# rsync read-only / non-write flags that happen to carry slashes
+# must NOT trigger the boundary check — they are not write targets.
+expect_allowed_cwd "rsync --exclude=/tmp src dst (filter pattern, not a write)" \
+  "rsync --exclude=/tmp $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+expect_allowed_cwd "rsync --rsync-path=/usr/bin/rsync src host:dst (remote bin)" \
+  "rsync --rsync-path=/usr/bin/rsync $PROJECT/CHANGELOG.md host:dst" \
+  "/tmp"
+
+expect_allowed_cwd "rsync --include=/conf src dst (filter include)" \
+  "rsync --include=/conf $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
 echo ""
