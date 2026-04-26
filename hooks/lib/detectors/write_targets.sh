@@ -39,12 +39,72 @@ run_write_target_detectors() {
   if command_name_is install; then
     local install_raw
     install_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//' || true)
-    # Skip mode arg (numeric, after -m/--mode), owner arg (after -o), group (after -g)
+    # Track whether the previous token was a flag whose VALUE we must
+    # skip on the next iteration. The previous walker also skipped any
+    # token matching the mode regex ^[0-9]+$ or owner[:group] regex
+    # ^[a-zA-Z_][a-zA-Z0-9_]*(:...)?$ unconditionally — that
+    # discarded legitimate file operands whose bare name happened to
+    # match (e.g. `install src 0755`, `install src root_wheel`),
+    # and when EFFECTIVE_CWD sat outside the project the unvalidated
+    # destination became a boundary bypass. install grammar puts
+    # mode/owner/group ONLY as the value of -m/--mode / -o/--owner /
+    # -g/--group, so positional skipping is safe to remove once the
+    # flag-value pairs are tracked explicitly.
+    # Reported by Copilot review on commit b6de687 (write_targets.sh:47).
+    #
+    # POSIX `--` end-of-options is also tracked: after the terminator,
+    # every token is a positional operand even when its name begins
+    # with `-`. Without this, a file operand like `-owned` slipped
+    # past the flag-skip case and never reached is_inside_project.
+    # Same shape as the rsync POSIX `--` fix in this branch.
+    # Reported by Copilot review on commit c4a70e0 (write_targets.sh:67).
+    local install_skip_next=0
+    local install_seen_dashdash=0
     while IFS= read -r TARGET; do
-      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
-      # Skip pure numeric (mode) or user:group patterns
-      if [[ "$TARGET" =~ ^[0-9]+$ ]] || [[ "$TARGET" =~ ^[a-zA-Z_][a-zA-Z0-9_]*(:[a-zA-Z_][a-zA-Z0-9_]*)?$ ]]; then
+      if [ "$install_skip_next" -eq 1 ]; then
+        install_skip_next=0
         continue
+      fi
+      [[ -z "$TARGET" ]] && continue
+      # Strip quotes for every flag test so `"--help"` and `--help`
+      # behave identically (bash strips quotes at exec time). For
+      # the attached form `--name=value` the walker only validates
+      # the value when name is on the WHITE-LIST of options that
+      # actually point at a write target — currently
+      # `--target-directory=`. All other -* tokens (including
+      # `--exclude=`, `--rsync-path=`, `--mode=`, etc.) are skipped
+      # as flags. The white-list approach replaced an earlier
+      # `=*/*` heuristic that both missed relative values and
+      # over-matched benign options carrying `/` (Codex review on
+      # commit f76ec34, write_targets.sh:100 + 161).
+      if [ $install_seen_dashdash -eq 0 ]; then
+        local install_tok
+        install_tok=$(strip_quotes "$TARGET")
+        if [ "$install_tok" = "--" ]; then
+          install_seen_dashdash=1
+          continue
+        fi
+        if [[ "$install_tok" == -* ]]; then
+          if [[ "$install_tok" == --target-directory=* ]]; then
+            local install_attached_val="${install_tok#*=}"
+            install_attached_val=$(expand_path "$install_attached_val")
+            if [[ "$install_attached_val" != /* ]]; then
+              install_attached_val="$EFFECTIVE_CWD/$install_attached_val"
+            fi
+            local install_attached_resolved
+            install_attached_resolved=$(resolve_path "$install_attached_val")
+            if ! is_inside_project "$install_attached_resolved"; then
+              echo "BLOCKED: 'install --target-directory' targets '$install_attached_resolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+              exit 2
+            fi
+            continue
+          fi
+          case "$install_tok" in
+            -m|--mode|-o|--owner|-g|--group)
+              install_skip_next=1 ;;
+          esac
+          continue
+        fi
       fi
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
@@ -62,8 +122,60 @@ run_write_target_detectors() {
   if echo "$CMD" | grep -qE '(^|[[:space:]])rsync($|[[:space:]])'; then
     local rsync_raw
     rsync_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//' || true)
+    # Track POSIX `--` end-of-options. After it, every token is a
+    # positional operand even when its name begins with `-`. Without
+    # this, a file operand like `-owned` slipped past the
+    # `[[ "$TARGET" == -* ]] && continue` flag-skip and never
+    # reached is_inside_project. Same shape as the sed-i and
+    # truncate POSIX `--` fix shipped in PR #12 for those two
+    # walkers. Reported by Copilot review on commit b6de687
+    # (write_targets.sh:66).
+    local rsync_seen_dashdash=0
     while IFS= read -r TARGET; do
-      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
+      [[ -z "$TARGET" ]] && continue
+      if [ $rsync_seen_dashdash -eq 0 ]; then
+        # Same white-list approach as the install walker. The
+        # attached options that actually point at a filesystem
+        # write target are:
+        #   --log-file=         (writes the run log)
+        #   --partial-dir=      (writes partial transfers)
+        #   --backup-dir=       (writes backups before overwrite)
+        #   --temp-dir=         (writes scratch during transfer)
+        #   --write-batch=      (writes batch file)
+        #   --only-write-batch= (writes batch file, no transfer)
+        #
+        # Other slash-bearing options like --exclude=PATTERN,
+        # --rsync-path=REMOTE_BIN, --read-batch=PATH (read-only),
+        # and the read-only --*-from= filter file flags are
+        # skipped as ordinary flags so the detector does not
+        # over-match (Codex review on commit f76ec34,
+        # write_targets.sh:161, with --write-batch=/--only-write-
+        # batch= added per Codex review on commit 00d7300).
+        local rsync_tok
+        rsync_tok=$(strip_quotes "$TARGET")
+        if [ "$rsync_tok" = "--" ]; then
+          rsync_seen_dashdash=1
+          continue
+        fi
+        if [[ "$rsync_tok" == -* ]]; then
+          case "$rsync_tok" in
+            --log-file=*|--partial-dir=*|--backup-dir=*|--temp-dir=*|--write-batch=*|--only-write-batch=*)
+              local rsync_attached_val="${rsync_tok#*=}"
+              rsync_attached_val=$(expand_path "$rsync_attached_val")
+              if [[ "$rsync_attached_val" != /* ]]; then
+                rsync_attached_val="$EFFECTIVE_CWD/$rsync_attached_val"
+              fi
+              local rsync_attached_resolved
+              rsync_attached_resolved=$(resolve_path "$rsync_attached_val")
+              if ! is_inside_project "$rsync_attached_resolved"; then
+                echo "BLOCKED: 'rsync ${rsync_tok%%=*}' targets '$rsync_attached_resolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+                exit 2
+              fi
+              ;;
+          esac
+          continue
+        fi
+      fi
       # Skip remote paths (user@host:/path or host:/path)
       if [[ "$TARGET" =~ : ]]; then
         continue
