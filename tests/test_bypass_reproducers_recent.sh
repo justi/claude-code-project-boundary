@@ -583,3 +583,47 @@ expect_allowed "install --help (long flag before --)" \
   "install --help"
 
 echo ""
+
+# ============================================================
+# 25. Quoted attached options must NOT bypass flag-skip
+# ------------------------------------------------------------
+# Earlier commit ce011af stripped quotes before the generic `-*`
+# flag-skip in install / rsync walkers. Side effect: a quoted
+# attached option like "--target-directory=/tmp/out" or
+# "--log-file=/tmp/log" was normalized into a flag and skipped
+# unconditionally — even though its VALUE points outside the
+# project. Pre-existing behaviour treated the quoted form as a
+# pathname (joined to EFFECTIVE_CWD, resolved, blocked by
+# is_inside_project).
+#
+# Fix: strip_quotes ONLY for the literal `--` terminator test;
+# the generic `-*` flag-skip stays on RAW TARGET so quoted
+# attached options fall through to path validation.
+#
+# Reported by Codex review on commit ce011af
+# (write_targets.sh:76-87 + 123-128).
+# ============================================================
+echo "--- 25. quoted attached options must reach path validation ---"
+
+expect_blocked_cwd "install \"--target-directory=/tmp/out\" src (cwd=/tmp)" \
+  "install \"--target-directory=/tmp/out\" $PROJECT/CHANGELOG.md" \
+  "/tmp"
+
+expect_blocked_cwd "rsync \"--log-file=/tmp/rsynclog\" src dest (cwd=/tmp)" \
+  "rsync \"--log-file=/tmp/rsynclog\" $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+expect_blocked_cwd "rsync \"--partial-dir=/tmp/p\" src dest (cwd=/tmp)" \
+  "rsync \"--partial-dir=/tmp/p\" $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+# Positive cases that must remain ALLOWED:
+# - unquoted --target-directory=/in-project-path (already works)
+# - unquoted --log-file with in-project value
+expect_allowed "install --target-directory=PROJECT/dir src" \
+  "install --target-directory=$PROJECT/tests $PROJECT/CHANGELOG.md"
+
+expect_allowed "rsync --log-file=PROJECT/log src dest" \
+  "rsync --log-file=$PROJECT/tests/log.txt $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+echo ""

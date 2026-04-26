@@ -66,25 +66,30 @@ run_write_target_detectors() {
         continue
       fi
       [[ -z "$TARGET" ]] && continue
-      # Normalise the token before the `--` and flag tests — bash
-      # strips surrounding quotes from a command word at exec time,
-      # so `'--'` / `"--"` reach install as a bare `--`. Without
-      # this, a legitimate in-project install that quoted the
-      # terminator was wrongly treated as a pathname (Codex review
-      # on commit b460e57, write_targets.sh:69-70).
-      local install_tok
-      install_tok=$(strip_quotes "$TARGET")
-      if [ $install_seen_dashdash -eq 0 ] && [[ "$install_tok" == -* ]]; then
+      # `--` terminator test uses a strip_quotes view because bash
+      # strips surrounding quotes from a command word at exec time;
+      # `'--'` / `"--"` reach install as a bare `--`. The generic
+      # flag-skip case below uses the RAW token on purpose: a
+      # quoted attached option like `"--target-directory=/tmp/out"`
+      # must NOT be treated as a flag and skipped, because its
+      # value points outside the project — falling through to path
+      # resolution lets is_inside_project block it. Codex review
+      # on commit ce011af (write_targets.sh:76-87).
+      if [ $install_seen_dashdash -eq 0 ]; then
+        local install_tok
+        install_tok=$(strip_quotes "$TARGET")
         if [ "$install_tok" = "--" ]; then
           install_seen_dashdash=1
           continue
         fi
-        case "$install_tok" in
-          -m|--mode|-o|--owner|-g|--group)
-            install_skip_next=1 ;;
-        esac
-        # Attached `--mode=VALUE` etc. don't consume the next token.
-        continue
+        if [[ "$TARGET" == -* ]]; then
+          case "$TARGET" in
+            -m|--mode|-o|--owner|-g|--group)
+              install_skip_next=1 ;;
+          esac
+          # Attached `--mode=VALUE` etc. don't consume the next token.
+          continue
+        fi
       fi
       TARGET=$(expand_path "$TARGET")
       if [[ "$TARGET" != /* ]]; then
@@ -114,18 +119,21 @@ run_write_target_detectors() {
     while IFS= read -r TARGET; do
       [[ -z "$TARGET" ]] && continue
       if [ $rsync_seen_dashdash -eq 0 ]; then
-        # Normalise the token before the `--` test — bash strips
-        # surrounding quotes from a command word at exec time, so
-        # `'--'` / `"--"` reach rsync as a bare `--` (same shape
-        # as the install fix; Codex review on commit b460e57,
-        # write_targets.sh:69-70).
+        # `--` terminator test uses a strip_quotes view (bash
+        # strips quotes at exec time, so `'--'` / `"--"` reach
+        # rsync as a bare `--`). Generic flag-skip uses the RAW
+        # token: a quoted attached option like
+        # `"--log-file=/tmp/log"` must NOT be treated as a flag
+        # and skipped, because its value points outside the
+        # project. Codex review on commit ce011af
+        # (write_targets.sh:123-128).
         local rsync_tok
         rsync_tok=$(strip_quotes "$TARGET")
         if [ "$rsync_tok" = "--" ]; then
           rsync_seen_dashdash=1
           continue
         fi
-        [[ "$rsync_tok" == -* ]] && continue
+        [[ "$TARGET" == -* ]] && continue
       fi
       # Skip remote paths (user@host:/path or host:/path)
       if [[ "$TARGET" =~ : ]]; then
