@@ -136,15 +136,21 @@ run_write_target_detectors() {
       if [ $rsync_seen_dashdash -eq 0 ]; then
         # Same white-list approach as the install walker. The
         # attached options that actually point at a filesystem
-        # write target are --log-file= (writes the run log),
-        # --partial-dir= (writes partial transfers),
-        # --backup-dir= (writes backups before overwrite), and
-        # --temp-dir= (writes scratch files during transfer).
+        # write target are:
+        #   --log-file=         (writes the run log)
+        #   --partial-dir=      (writes partial transfers)
+        #   --backup-dir=       (writes backups before overwrite)
+        #   --temp-dir=         (writes scratch during transfer)
+        #   --write-batch=      (writes batch file)
+        #   --only-write-batch= (writes batch file, no transfer)
+        #
         # Other slash-bearing options like --exclude=PATTERN,
-        # --rsync-path=REMOTE_BIN, and the read-only --*-from=
-        # filter file flags are skipped as ordinary flags so the
-        # detector does not over-match (Codex review on commit
-        # f76ec34, write_targets.sh:161).
+        # --rsync-path=REMOTE_BIN, --read-batch=PATH (read-only),
+        # and the read-only --*-from= filter file flags are
+        # skipped as ordinary flags so the detector does not
+        # over-match (Codex review on commit f76ec34,
+        # write_targets.sh:161, with --write-batch=/--only-write-
+        # batch= added per Codex review on commit 00d7300).
         local rsync_tok
         rsync_tok=$(strip_quotes "$TARGET")
         if [ "$rsync_tok" = "--" ]; then
@@ -153,7 +159,7 @@ run_write_target_detectors() {
         fi
         if [[ "$rsync_tok" == -* ]]; then
           case "$rsync_tok" in
-            --log-file=*|--partial-dir=*|--backup-dir=*|--temp-dir=*)
+            --log-file=*|--partial-dir=*|--backup-dir=*|--temp-dir=*|--write-batch=*|--only-write-batch=*)
               local rsync_attached_val="${rsync_tok#*=}"
               rsync_attached_val=$(expand_path "$rsync_attached_val")
               if [[ "$rsync_attached_val" != /* ]]; then

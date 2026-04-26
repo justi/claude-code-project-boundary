@@ -710,4 +710,18 @@ expect_allowed_cwd "rsync --include=/conf src dst (filter include)" \
   "rsync --include=/conf $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
   "/tmp"
 
+# rsync batch-file write options (Codex commit 00d7300):
+expect_blocked_cwd "rsync --write-batch=/tmp/batch src dst" \
+  "rsync --write-batch=/tmp/batch $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+expect_blocked_cwd "rsync --only-write-batch=/tmp/batch src dst" \
+  "rsync --only-write-batch=/tmp/batch $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+# --read-batch is a READ, not a write target — must remain ALLOWED:
+expect_allowed_cwd "rsync --read-batch=/tmp/batch src dst (read-only)" \
+  "rsync --read-batch=/tmp/batch $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
 echo ""
