@@ -82,8 +82,24 @@ run_write_target_detectors() {
   if echo "$CMD" | grep -qE '(^|[[:space:]])rsync($|[[:space:]])'; then
     local rsync_raw
     rsync_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//' || true)
+    # Track POSIX `--` end-of-options. After it, every token is a
+    # positional operand even when its name begins with `-`. Without
+    # this, a file operand like `-owned` slipped past the
+    # `[[ "$TARGET" == -* ]] && continue` flag-skip and never
+    # reached is_inside_project. Same shape as the sed-i and
+    # truncate POSIX `--` fix shipped in PR #12 for those two
+    # walkers. Reported by Copilot review on commit b6de687
+    # (write_targets.sh:66).
+    local rsync_seen_dashdash=0
     while IFS= read -r TARGET; do
-      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
+      [[ -z "$TARGET" ]] && continue
+      if [ $rsync_seen_dashdash -eq 0 ]; then
+        if [ "$TARGET" = "--" ]; then
+          rsync_seen_dashdash=1
+          continue
+        fi
+        [[ "$TARGET" == -* ]] && continue
+      fi
       # Skip remote paths (user@host:/path or host:/path)
       if [[ "$TARGET" =~ : ]]; then
         continue
