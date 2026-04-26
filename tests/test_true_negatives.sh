@@ -585,6 +585,33 @@ expect_blocked "ln -sf src /dev/null (symlink target replaces device node)" \
 echo ""
 
 # ============================================================
+# Bare destructive commands with no path arguments must pass
+# ------------------------------------------------------------
+# Under `set -euo pipefail` the raw-arg extraction pipelines used a
+# `grep -oE '(^|whitespace)CMD(whitespace).*' | sed ...` pattern.
+# grep exits 1 when it finds no match (bare `rm`, `mv`, ...), and
+# pipefail then propagated that exit into the overall command
+# substitution, which set -e turned into an abort of the whole
+# guard run (exit 1 rather than 0). Users would see the hook fail
+# with no diagnostic while bash itself would print its own usage
+# error for the bare command. Reported by Copilot review on PR #16;
+# fixed in the detector modules by appending `|| true` to every
+# raw-arg extraction pipeline.
+# ============================================================
+echo "--- bare destructive commands must not abort the guard ---"
+
+expect_allowed "bare rm (no args — bash prints usage)"       "rm"
+expect_allowed "bare mv (no args)"                            "mv"
+expect_allowed "bare cp (no args)"                            "cp"
+expect_allowed "bare ln (no args)"                            "ln"
+expect_allowed "bare install (no args)"                       "install"
+expect_allowed "bare chmod (no args)"                         "chmod"
+expect_allowed "bare chown (no args)"                         "chown"
+expect_allowed "bare tee (no args)"                           "tee"
+
+echo ""
+
+# ============================================================
 # <<\EOF backslash-escaped heredoc delimiter: sed/truncate/redirect
 # walkers must NOT false-positive on body bytes.
 # ------------------------------------------------------------
