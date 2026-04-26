@@ -627,3 +627,64 @@ expect_allowed "rsync --log-file=PROJECT/log src dest" \
   "rsync --log-file=$PROJECT/tests/log.txt $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
 
 echo ""
+
+# ============================================================
+# 26. Attached path-bearing options (--name=PATH) bypass
+# ------------------------------------------------------------
+# install / rsync walkers used `[[ "$TARGET" == -* ]] && continue`,
+# which dropped attached options like `--target-directory=/tmp/out`,
+# `--log-file=/tmp/log`, `--partial-dir=/tmp/p` regardless of
+# their value. The PATH portion was never validated.
+#
+# Note: also closes the BOTH the unquoted form (pre-existing
+# bypass not previously reproduced) and the quoted form (regression
+# would have been introduced by commit bb9e2c3).
+#
+# Fix shape: when the stripped token matches `-*` AND has form
+# `name=value` AND value contains `/`, extract the value and run
+# it through the same boundary check used for ordinary path
+# operands.
+# ============================================================
+echo "--- 26. attached path-bearing options must be validated ---"
+
+expect_blocked_cwd "install --target-directory=/tmp/out src (unquoted attached)" \
+  "install --target-directory=/tmp/out $PROJECT/CHANGELOG.md" \
+  "/tmp"
+
+expect_blocked_cwd "rsync --log-file=/tmp/log src dest (unquoted attached)" \
+  "rsync --log-file=/tmp/log $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+expect_blocked_cwd "rsync --partial-dir=/tmp/p src dest" \
+  "rsync --partial-dir=/tmp/p $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+# Positive cases (P2 regression fix from earlier P1 fix):
+# Quoted plain flags must remain ALLOWED — they are flag names,
+# not paths.
+expect_allowed_cwd "install \"--help\" (quoted plain flag)" \
+  "install \"--help\"" \
+  "/tmp"
+
+expect_allowed_cwd "install \"--mode\" 0755 src dst (quoted -m two-token)" \
+  "install \"--mode\" 0755 $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+expect_allowed_cwd "rsync \"--help\" (quoted plain flag)" \
+  "rsync \"--help\"" \
+  "/tmp"
+
+expect_allowed_cwd "rsync \"-a\" src dest (quoted short flag)" \
+  "rsync \"-a\" $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+# Non-path attached values must remain ALLOWED.
+expect_allowed_cwd "install --mode=0755 src dst (attached non-path value)" \
+  "install --mode=0755 $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+expect_allowed_cwd "install --owner=root src dst (attached non-path value)" \
+  "install --owner=root $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+echo ""

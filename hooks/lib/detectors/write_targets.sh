@@ -66,15 +66,29 @@ run_write_target_detectors() {
         continue
       fi
       [[ -z "$TARGET" ]] && continue
-      # `--` terminator test uses a strip_quotes view because bash
-      # strips surrounding quotes from a command word at exec time;
-      # `'--'` / `"--"` reach install as a bare `--`. The generic
-      # flag-skip case below uses the RAW token on purpose: a
-      # quoted attached option like `"--target-directory=/tmp/out"`
-      # must NOT be treated as a flag and skipped, because its
-      # value points outside the project — falling through to path
-      # resolution lets is_inside_project block it. Codex review
-      # on commit ce011af (write_targets.sh:76-87).
+      # Always normalize via strip_quotes so the flag tests work
+      # whether the caller wrote `--help` or `"--help"` — bash
+      # strips surrounding quotes from a command word at exec time.
+      # Three cases on the stripped token, in order:
+      #
+      #   (a) literal `--` terminator → set install_seen_dashdash
+      #   (b) attached path-bearing option `--name=PATH` (where
+      #       PATH contains `/`) → extract PATH and validate; this
+      #       catches both quoted and unquoted forms of options
+      #       like `--target-directory=/tmp/out` whose value would
+      #       otherwise slip past the flag-skip case
+      #   (c) plain flag (no `=` or attached non-path value) →
+      #       skip; flags from the (-m / --mode / -o / --owner /
+      #       -g / --group) set also flip install_skip_next so the
+      #       next token (their value) is consumed without
+      #       validation
+      #
+      # Iterations: ce011af stripped quotes for every flag test
+      # (P1 — quoted attached path-options bypassed); bb9e2c3
+      # stopped stripping for the flag-skip (P2 — quoted plain
+      # flags wrongly blocked from outside cwd). This commit
+      # combines: strip for the comparison, but route attached
+      # `=PATH` values through validation regardless.
       if [ $install_seen_dashdash -eq 0 ]; then
         local install_tok
         install_tok=$(strip_quotes "$TARGET")
@@ -82,12 +96,25 @@ run_write_target_detectors() {
           install_seen_dashdash=1
           continue
         fi
-        if [[ "$TARGET" == -* ]]; then
-          case "$TARGET" in
+        if [[ "$install_tok" == -* ]]; then
+          if [[ "$install_tok" == *=*/* ]]; then
+            local install_attached_val="${install_tok#*=}"
+            install_attached_val=$(expand_path "$install_attached_val")
+            if [[ "$install_attached_val" != /* ]]; then
+              install_attached_val="$EFFECTIVE_CWD/$install_attached_val"
+            fi
+            local install_attached_resolved
+            install_attached_resolved=$(resolve_path "$install_attached_val")
+            if ! is_inside_project "$install_attached_resolved"; then
+              echo "BLOCKED: 'install' attached-option value '$install_attached_resolved' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+              exit 2
+            fi
+            continue
+          fi
+          case "$install_tok" in
             -m|--mode|-o|--owner|-g|--group)
               install_skip_next=1 ;;
           esac
-          # Attached `--mode=VALUE` etc. don't consume the next token.
           continue
         fi
       fi
@@ -119,21 +146,33 @@ run_write_target_detectors() {
     while IFS= read -r TARGET; do
       [[ -z "$TARGET" ]] && continue
       if [ $rsync_seen_dashdash -eq 0 ]; then
-        # `--` terminator test uses a strip_quotes view (bash
-        # strips quotes at exec time, so `'--'` / `"--"` reach
-        # rsync as a bare `--`). Generic flag-skip uses the RAW
-        # token: a quoted attached option like
-        # `"--log-file=/tmp/log"` must NOT be treated as a flag
-        # and skipped, because its value points outside the
-        # project. Codex review on commit ce011af
-        # (write_targets.sh:123-128).
+        # Same shape as the install walker above. Always normalize
+        # via strip_quotes for the flag tests; route attached
+        # `=PATH` values through path validation so neither quoted
+        # nor unquoted `--log-file=/tmp/log` /
+        # `--partial-dir=/tmp/p` / etc. slip past the boundary.
         local rsync_tok
         rsync_tok=$(strip_quotes "$TARGET")
         if [ "$rsync_tok" = "--" ]; then
           rsync_seen_dashdash=1
           continue
         fi
-        [[ "$TARGET" == -* ]] && continue
+        if [[ "$rsync_tok" == -* ]]; then
+          if [[ "$rsync_tok" == *=*/* ]]; then
+            local rsync_attached_val="${rsync_tok#*=}"
+            rsync_attached_val=$(expand_path "$rsync_attached_val")
+            if [[ "$rsync_attached_val" != /* ]]; then
+              rsync_attached_val="$EFFECTIVE_CWD/$rsync_attached_val"
+            fi
+            local rsync_attached_resolved
+            rsync_attached_resolved=$(resolve_path "$rsync_attached_val")
+            if ! is_inside_project "$rsync_attached_resolved"; then
+              echo "BLOCKED: 'rsync' attached-option value '$rsync_attached_resolved' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+              exit 2
+            fi
+          fi
+          continue
+        fi
       fi
       # Skip remote paths (user@host:/path or host:/path)
       if [[ "$TARGET" =~ : ]]; then
