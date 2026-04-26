@@ -647,3 +647,30 @@ expect_allowed 'sed -i mention in <<-\EOF body (indented backslash form)' \
 	EOF"
 
 echo ""
+
+# ============================================================
+# Quoted POSIX `--` end-of-options terminator
+# ------------------------------------------------------------
+# bash strips the surrounding quotes from a command word at exec
+# time, so `'--'` and `"--"` reach the invoked tool as a bare
+# `--`. Path walkers must normalize via strip_quotes before
+# comparing the token against the literal `--`, otherwise
+# legitimate in-project installs / rsyncs / etc. that happen to
+# quote the terminator are wrongly blocked. Reported by Codex
+# review on commit b460e57 (write_targets.sh:69-70).
+# ============================================================
+echo "--- quoted POSIX -- terminator must not false-positive ---"
+
+expect_allowed_cwd "install '--' src dest (single-quoted --, cwd=/tmp)" \
+  "install '--' $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" "/tmp"
+
+expect_allowed_cwd "install \"--\" src dest (double-quoted --, cwd=/tmp)" \
+  "install \"--\" $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" "/tmp"
+
+expect_allowed_cwd "rsync '--' src dest (single-quoted --, cwd=/tmp)" \
+  "rsync '--' $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" "/tmp"
+
+expect_allowed_cwd "rsync \"--\" src dest (double-quoted --, cwd=/tmp)" \
+  "rsync \"--\" $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" "/tmp"
+
+echo ""

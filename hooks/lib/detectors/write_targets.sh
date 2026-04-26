@@ -66,12 +66,20 @@ run_write_target_detectors() {
         continue
       fi
       [[ -z "$TARGET" ]] && continue
-      if [ $install_seen_dashdash -eq 0 ] && [[ "$TARGET" == -* ]]; then
-        if [ "$TARGET" = "--" ]; then
+      # Normalise the token before the `--` and flag tests — bash
+      # strips surrounding quotes from a command word at exec time,
+      # so `'--'` / `"--"` reach install as a bare `--`. Without
+      # this, a legitimate in-project install that quoted the
+      # terminator was wrongly treated as a pathname (Codex review
+      # on commit b460e57, write_targets.sh:69-70).
+      local install_tok
+      install_tok=$(strip_quotes "$TARGET")
+      if [ $install_seen_dashdash -eq 0 ] && [[ "$install_tok" == -* ]]; then
+        if [ "$install_tok" = "--" ]; then
           install_seen_dashdash=1
           continue
         fi
-        case "$TARGET" in
+        case "$install_tok" in
           -m|--mode|-o|--owner|-g|--group)
             install_skip_next=1 ;;
         esac
@@ -106,11 +114,18 @@ run_write_target_detectors() {
     while IFS= read -r TARGET; do
       [[ -z "$TARGET" ]] && continue
       if [ $rsync_seen_dashdash -eq 0 ]; then
-        if [ "$TARGET" = "--" ]; then
+        # Normalise the token before the `--` test — bash strips
+        # surrounding quotes from a command word at exec time, so
+        # `'--'` / `"--"` reach rsync as a bare `--` (same shape
+        # as the install fix; Codex review on commit b460e57,
+        # write_targets.sh:69-70).
+        local rsync_tok
+        rsync_tok=$(strip_quotes "$TARGET")
+        if [ "$rsync_tok" = "--" ]; then
           rsync_seen_dashdash=1
           continue
         fi
-        [[ "$TARGET" == -* ]] && continue
+        [[ "$rsync_tok" == -* ]] && continue
       fi
       # Skip remote paths (user@host:/path or host:/path)
       if [[ "$TARGET" =~ : ]]; then
