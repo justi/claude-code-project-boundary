@@ -39,11 +39,31 @@ run_write_target_detectors() {
   if command_name_is install; then
     local install_raw
     install_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//' || true)
-    # Skip mode arg (numeric, after -m/--mode), owner arg (after -o), group (after -g)
+    # Track whether the previous token was a flag whose VALUE we must
+    # skip on the next iteration. The previous walker also skipped any
+    # token matching the mode regex ^[0-9]+$ or owner[:group] regex
+    # ^[a-zA-Z_][a-zA-Z0-9_]*(:...)?$ unconditionally — that
+    # discarded legitimate file operands whose bare name happened to
+    # match (e.g. `install src 0755`, `install src root_wheel`),
+    # and when EFFECTIVE_CWD sat outside the project the unvalidated
+    # destination became a boundary bypass. install grammar puts
+    # mode/owner/group ONLY as the value of -m/--mode / -o/--owner /
+    # -g/--group, so positional skipping is safe to remove once the
+    # flag-value pairs are tracked explicitly.
+    # Reported by Copilot review on commit b6de687 (write_targets.sh:47).
+    local install_skip_next=0
     while IFS= read -r TARGET; do
-      [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
-      # Skip pure numeric (mode) or user:group patterns
-      if [[ "$TARGET" =~ ^[0-9]+$ ]] || [[ "$TARGET" =~ ^[a-zA-Z_][a-zA-Z0-9_]*(:[a-zA-Z_][a-zA-Z0-9_]*)?$ ]]; then
+      if [ "$install_skip_next" -eq 1 ]; then
+        install_skip_next=0
+        continue
+      fi
+      [[ -z "$TARGET" ]] && continue
+      if [[ "$TARGET" == -* ]]; then
+        case "$TARGET" in
+          -m|--mode|-o|--owner|-g|--group)
+            install_skip_next=1 ;;
+        esac
+        # Attached `--mode=VALUE` etc. don't consume the next token.
         continue
       fi
       TARGET=$(expand_path "$TARGET")
