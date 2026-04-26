@@ -51,14 +51,26 @@ run_write_target_detectors() {
     # -g/--group, so positional skipping is safe to remove once the
     # flag-value pairs are tracked explicitly.
     # Reported by Copilot review on commit b6de687 (write_targets.sh:47).
+    #
+    # POSIX `--` end-of-options is also tracked: after the terminator,
+    # every token is a positional operand even when its name begins
+    # with `-`. Without this, a file operand like `-owned` slipped
+    # past the flag-skip case and never reached is_inside_project.
+    # Same shape as the rsync POSIX `--` fix in this branch.
+    # Reported by Copilot review on commit c4a70e0 (write_targets.sh:67).
     local install_skip_next=0
+    local install_seen_dashdash=0
     while IFS= read -r TARGET; do
       if [ "$install_skip_next" -eq 1 ]; then
         install_skip_next=0
         continue
       fi
       [[ -z "$TARGET" ]] && continue
-      if [[ "$TARGET" == -* ]]; then
+      if [ $install_seen_dashdash -eq 0 ] && [[ "$TARGET" == -* ]]; then
+        if [ "$TARGET" = "--" ]; then
+          install_seen_dashdash=1
+          continue
+        fi
         case "$TARGET" in
           -m|--mode|-o|--owner|-g|--group)
             install_skip_next=1 ;;
