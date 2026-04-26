@@ -1027,3 +1027,52 @@ expect_allowed "install -m 0755 -o root -g wheel src dest (all flags combined)" 
   "install -m 0755 -o root -g wheel $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
 
 echo ""
+
+# ============================================================
+# 23. rsync detector ignores POSIX `--` end-of-options
+# ------------------------------------------------------------
+# The rsync path-walker treats every token starting with `-` as a
+# flag (`[[ "$TARGET" == -* ]] && continue`) and skips it without
+# validation. POSIX `--` ends option parsing; every token after it
+# is a positional operand even when its name begins with `-`. So a
+# file operand named `-owned` slips past the boundary check, and
+# rsync writes to / from a path the guard never resolved.
+#
+# Same shape as the sed -i / truncate POSIX `--` bypass that PR #12
+# closed for those two walkers — rsync was missed because Codex's
+# original audit didn't include it.
+#
+# Reported by Copilot review on commit b6de687
+# (write_targets.sh:66).
+# ============================================================
+echo "--- 23. rsync ignores POSIX -- end-of-options ---"
+
+expect_blocked_cwd "rsync src -- -owned (POSIX --, cwd=/tmp)" \
+  "rsync $PROJECT/CHANGELOG.md -- -owned" \
+  "/tmp"
+
+expect_blocked_cwd "rsync -a src -- -dash_dest (with -a flag, POSIX --, cwd=/tmp)" \
+  "rsync -a $PROJECT/CHANGELOG.md -- -dash_dest" \
+  "/tmp"
+
+expect_blocked_cwd "rsync -- -src -dest (both operands dash-prefixed)" \
+  "rsync -- -src -dest" \
+  "/tmp"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - rsync without -- (current flag-skip behaviour preserved)
+# - rsync -- src dest with non-dash operands (-- handled, both validated)
+# - rsync --help / --version (long flags before -- still skipped)
+expect_allowed "rsync -a src dest (no --, normal flag handling, in project)" \
+  "rsync -a $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "rsync -- src dest (-- with normal operands, in project)" \
+  "rsync -- $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "rsync --help (long flag before --)" \
+  "rsync --help"
+
+expect_allowed "rsync --version (long flag before --)" \
+  "rsync --version"
+
+echo ""
