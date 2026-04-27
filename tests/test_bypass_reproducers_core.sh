@@ -8,11 +8,12 @@
 # corresponding reproducer is added FIRST and must FAIL until the fix
 # lands — see CLAUDE.md §Security-bypass TDD flow.
 #
-# Sections 16-23 (heredoc parser, multi-heredoc body ordering, quoted
+# Sections 16-27 (heredoc parser, multi-heredoc body ordering, quoted
 # command-name, /bin prefix in CMD_BLANKED, install / rsync walker
-# fixes, php attached form) live in test_bypass_reproducers_recent.sh.
-# Both files are sourced by test_guard.sh; the split keeps each file
-# under the 1000-line refactor threshold.
+# fixes, php attached form, attached-option white-list, attached-flag
+# behavior pinning) live in test_bypass_reproducers_recent.sh. Both
+# files are sourced by test_guard.sh; the split keeps each file under
+# the 1000-line refactor threshold.
 #
 # Sourced by test_guard.sh — requires helpers.sh loaded first.
 
