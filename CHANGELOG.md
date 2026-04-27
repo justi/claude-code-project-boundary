@@ -5,6 +5,36 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] — 2026-04-27
+
+### Security — closes 3 bypass categories in `install` / `rsync` walkers
+
+- **A. `install` POSIX double-dash bypass** — the `install` walker treated `--` as just another flag-looking token and walked past it, so a quoted `"--"` (or even bare `--`) followed by an outside-project target slipped through. Reproducers added first (`c571b91`), fix in `b460e57`: detect end-of-options and validate the next operand against the project boundary like any other write target.
+- **B. `rsync` POSIX double-dash bypass** — same shape as A in the `rsync` walker (`d8c40c1` reproducers, `5b11dbe` fix). The follow-up `ce011af` strips surrounding quotes before the `--` test in both walkers so `"--"` and `'--'` cannot smuggle the marker past the comparison.
+- **C. `install` mode/user_group flag-skip bypass** — the walker's flag-skip logic for `-m MODE` / `-o OWNER` / `-g GROUP` consumed the *next* token without validating it, so an attacker could feed an outside-project path as the "value" and the real target after it was never scanned. Reproducers in `f34fb48`, fix in `bab3ffe`.
+
+### Hardening — Codex review follow-ups on the C-class fix
+
+- **Surgical flag-skip with quote-aware comparison + value validation** (`bb9e2c3`, `f76ec34`) — the broad strip_quotes pass over every token introduced a P2 false positive on legitimate flag-attached paths. Narrowed strip_quotes to the POSIX `--` test only, kept flag-skip on the raw token, and added explicit validation of attached path values (`-mPATH`, `--mode=PATH`).
+- **Replace `=/` heuristic with explicit write-target option white-list** (`00d7300`) — the prior heuristic treated *any* `--name=value` starting with `/` as a write target, producing false positives on read-only options that happen to take an absolute path. Replaced with an explicit white-list of rsync/install options that actually write.
+- **Add rsync batch-file write options to white-list** (`8141400`) — Codex flagged that `--write-batch=FILE` and `--only-write-batch=FILE` were missing from the white-list; both write to disk and now block when the target is outside the project.
+
+### Refactor
+
+- **`hooks/guard.sh` — decompose `check_single_command` into detector clusters** (#16, `6a7779e`). No behavior change; smaller functions per detector family make the next bypass closure easier to land surgically.
+- **`hooks/guard.sh` — extract tokenize / command_name / paths / heredoc modules** (#15, `38cdde0`).
+- **`tests/test_bypass_reproducers.sh` split into core + recent** (`c4a70e0`) — the file had grown past 1000 lines; splitting keeps the suite readable and lets new reproducers land without churning the whole file.
+
+### Tests
+
+- New reproducers across `tests/test_bypass_reproducers_recent.sh` for each of the 3 closures (each FAILED first, per the project TDD flow).
+- `tests/test_true_negatives.sh` extended with positive cases for legitimate flag-attached paths and quoted operands.
+- Full suite: **785 passed / 0 failed.**
+
+### Notes
+
+- All three closures follow `CLAUDE.md §Security-bypass TDD flow`: one bypass per commit, reproducer FAILS first, then the patch. Codex review on each commit drove the four hardening follow-ups above; each is its own commit so regression bisect stays clean.
+
 ## [1.7.0] — 2026-04-23
 
 ### Security — closes 3 bypass categories from Codex review on commit e01df86
