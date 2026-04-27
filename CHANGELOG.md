@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Hardening — Codex review follow-ups on the C-class fix
 
-- **Surgical flag-skip with quote-aware comparison + value validation** (`bb9e2c3`, `f76ec34`) — the broad strip_quotes pass over every token introduced a P2 false positive on legitimate flag-attached paths. Narrowed strip_quotes to the POSIX `--` test only, kept flag-skip on the raw token, and added explicit validation of attached path values (`-mPATH`, `--mode=PATH`).
+- **Surgical flag-skip with quote-aware comparison** (`bb9e2c3`, `f76ec34`) — the iteration on top of the C-class fix went through two extremes before settling: `ce011af` ran every flag test on the strip_quotes view (P1: quoted attached path-options like `"--target-directory=/tmp/out"` were also stripped of their `--` and treated as non-flags); `bb9e2c3` reverted the flag-skip to the raw token (P2: quoted plain flags like `"--help"` and `"--mode" 0755 src dst` were misread as pathname operands and blocked from outside cwd). The settled shape (`f76ec34`) keeps the strip_quotes view for both the `--` terminator test and the `-*` flag-skip, and routes attached `--name=PATH` values through path validation when (and only when) `name` is on the write-target white-list (see next bullet). Mode/owner/group VALUES are deliberately not path-validated — `--mode=`, `--owner=`, `--group=`, `-mPATH`, etc. are skipped as ordinary flags.
 - **Replace `=/` heuristic with explicit write-target option white-list** (`00d7300`) — the prior heuristic treated *any* `--name=value` starting with `/` as a write target, producing false positives on read-only options that happen to take an absolute path. Replaced with an explicit white-list of rsync/install options that actually write.
 - **Add rsync batch-file write options to white-list** (`8141400`) — Codex flagged that `--write-batch=FILE` and `--only-write-batch=FILE` were missing from the white-list; both write to disk and now block when the target is outside the project.
 
@@ -27,9 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Tests
 
-- New reproducers across `tests/test_bypass_reproducers_recent.sh` for each of the 3 closures (each FAILED first, per the project TDD flow).
+- New reproducers across `tests/test_bypass_reproducers_recent.sh` for each of the 3 closures (each FAILED first, per the project TDD flow). Section 27 added in the Copilot follow-up commit pins the attached-flag behavior contract (short / long / quoted forms for `-m`/`-o`/`-g`, and the explicit "no path-validation for mode/owner/group VALUES" rule) so future doc drift is caught by the suite, not just by review.
 - `tests/test_true_negatives.sh` extended with positive cases for legitimate flag-attached paths and quoted operands.
-- Full suite: **785 passed / 0 failed.**
+- `tests/test_bash_advanced.sh` §50 added documenting the `$VAR` / `${VAR}` fail-closed contract (BLOCKED: bare, braced, positional, special parameters; ALLOWED: `$HOME` passthrough, ANSI-C `$'…'`, i18n `$"…"`, backslash-escaped, single-quoted, quoted-heredoc body).
+- Full suite: **821 passed / 0 failed.**
 
 ### Notes
 

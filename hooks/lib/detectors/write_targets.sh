@@ -72,8 +72,11 @@ run_write_target_detectors() {
       # the value when name is on the WHITE-LIST of options that
       # actually point at a write target — currently
       # `--target-directory=`. All other -* tokens (including
-      # `--exclude=`, `--rsync-path=`, `--mode=`, etc.) are skipped
-      # as flags. The white-list approach replaced an earlier
+      # `--mode=`, `--owner=`, `--group=`, etc.) are skipped as
+      # flags — their values aren't paths, and even when they
+      # syntactically look like one (e.g. `--mode=/0644`), they
+      # never become a write destination. The white-list approach
+      # replaced an earlier
       # `=*/*` heuristic that both missed relative values and
       # over-matched benign options carrying `/` (Codex review on
       # commit f76ec34, write_targets.sh:100 + 161).
