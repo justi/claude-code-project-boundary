@@ -1,4 +1,4 @@
-[project-boundary] Guard blocks `$(...)` (fail-closed, uninspectable). For git commit with multiline body, ALWAYS use stdin heredoc:
+[project-boundary] Guard blocks `$(...)` AND `$VAR`/`${VAR}` operands (fail-closed, uninspectable; only `$HOME` is allowed). Inline literal values, or use Read/Grep tools instead of Bash piping with shell vars. For git commit with multiline body, ALWAYS use stdin heredoc:
   git commit -F - <<'EOF'
   <title>
 

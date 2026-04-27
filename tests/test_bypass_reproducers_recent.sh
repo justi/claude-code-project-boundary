@@ -1,13 +1,15 @@
 #!/bin/bash
-# Bypass reproducers (recent / sections 16-23) — heredoc parser,
+# Bypass reproducers (recent / sections 16-27) — heredoc parser,
 # multi-heredoc body ordering, quoted command-name, /bin prefix in
-# CMD_BLANKED, install / rsync walker fixes, php attached form.
+# CMD_BLANKED, install / rsync walker fixes (POSIX `--`, attached
+# write-target white-list, quoted-option normalization), php attached
+# form, attached-flag behavior pinning.
 # Continuation of test_bypass_reproducers_core.sh; same TDD discipline.
 #
 # Sourced by test_guard.sh — requires helpers.sh loaded first.
 
 echo "========================================"
-echo "  Bypass reproducers (recent, sections 16-23)"
+echo "  Bypass reproducers (recent, sections 16-27)"
 echo "  PROJECT_DIR=$PROJECT"
 echo "========================================"
 echo ""
@@ -596,12 +598,18 @@ echo ""
 # pathname (joined to EFFECTIVE_CWD, resolved, blocked by
 # is_inside_project).
 #
-# Fix: strip_quotes ONLY for the literal `--` terminator test;
-# the generic `-*` flag-skip stays on RAW TARGET so quoted
-# attached options fall through to path validation.
+# Fix (current shape after follow-ups): every flag test is run
+# on a strip_quotes view of the token (`*_tok`), so `"--help"`
+# behaves like `--help`, `"--"` behaves like `--`, and a quoted
+# attached option like `"--target-directory=/tmp/out"` reaches
+# the white-list match below and gets its value validated. The
+# raw token is no longer special-cased — the white-list (here)
+# and the explicit -m/-o/-g case (further down) decide which
+# tokens carry write-target values vs. ordinary skip-as-flag.
 #
 # Reported by Codex review on commit ce011af
-# (write_targets.sh:76-87 + 123-128).
+# (write_targets.sh:76-87 + 123-128); refined by f76ec34 and
+# narrowed to the white-list shape by 00d7300.
 # ============================================================
 echo "--- 25. quoted attached options must reach path validation ---"
 
@@ -636,14 +644,21 @@ echo ""
 # `--log-file=/tmp/log`, `--partial-dir=/tmp/p` regardless of
 # their value. The PATH portion was never validated.
 #
-# Note: also closes the BOTH the unquoted form (pre-existing
-# bypass not previously reproduced) and the quoted form (regression
-# would have been introduced by commit bb9e2c3).
+# Note: closes BOTH the unquoted form (pre-existing bypass not
+# previously reproduced) and the quoted form (regression that
+# would have been re-introduced by commit bb9e2c3).
 #
-# Fix shape: when the stripped token matches `-*` AND has form
-# `name=value` AND value contains `/`, extract the value and run
-# it through the same boundary check used for ordinary path
-# operands.
+# Fix shape (current, after Codex 00d7300): instead of a generic
+# "any `-*=value` with `/` in value" heuristic, the walkers carry
+# an explicit white-list of options that actually point at a write
+# target — for `install` it is `--target-directory=`; for `rsync`
+# it is `--log-file=`, `--partial-dir=`, `--backup-dir=`,
+# `--temp-dir=`, `--write-batch=`, `--only-write-batch=`. Only
+# values of those options are run through the boundary check;
+# every other attached option (`--exclude=`, `--rsync-path=`,
+# `--mode=`, `--owner=`, `--group=`, …) is skipped as a flag.
+# The earlier `=*/*` heuristic both missed relative values and
+# over-matched benign options carrying `/`.
 # ============================================================
 echo "--- 26. attached path-bearing options must be validated ---"
 
@@ -722,6 +737,100 @@ expect_blocked_cwd "rsync --only-write-batch=/tmp/batch src dst" \
 # --read-batch is a READ, not a write target — must remain ALLOWED:
 expect_allowed_cwd "rsync --read-batch=/tmp/batch src dst (read-only)" \
   "rsync --read-batch=/tmp/batch $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" \
+  "/tmp"
+
+echo ""
+
+# ============================================================
+# 27. Attached-flag forms: behavior pinning for install -m/-o/-g
+# ------------------------------------------------------------
+# Documents what the `install` walker actually does for the four
+# attached forms of mode/owner/group flags, so future doc drift
+# is caught by the test suite (and not just by Copilot review on
+# the next PR). No bypass exists in any of these shapes — the
+# tests pin the contract:
+#
+#   bare:                `-m`, `--mode`         → consume next token (skip_next)
+#   short attached:      `-m0644`               → ordinary flag, no skip
+#   long  attached:      `--mode=0644`          → ordinary flag, no skip
+#   white-listed attached: `--target-directory=`→ value validated
+#
+# Mode/owner/group VALUES are never validated as paths — even
+# when the value syntactically looks like one (`--mode=/0644`).
+# This deliberately differs from the f76ec34 `=*/*` heuristic
+# (replaced by 00d7300) and matches the install grammar: those
+# flags carry a mode bitmask / owner-name / group-name, not a
+# filesystem path.
+#
+# True positives (BLOCKED) — the destination operand AFTER an
+# attached flag is still validated against the project boundary.
+# False positives prevented (ALLOWED) — legitimate use of every
+# attached form must pass when the destination is in-project.
+# ============================================================
+echo "--- 27. attached-flag behavior pinning (install) ---"
+
+# True positives: outside-project destination after attached flag
+# must be BLOCKED on the destination, not on the flag itself.
+expect_blocked_cwd "install -m0644 OUTSIDE (short attached + outside dest)" \
+  "install -m0644 $PROJECT/CHANGELOG.md /tmp/install_target_t27" \
+  "/tmp"
+
+expect_blocked_cwd "install --mode=0644 OUTSIDE (long attached + outside dest)" \
+  "install --mode=0644 $PROJECT/CHANGELOG.md /tmp/install_target_t27" \
+  "/tmp"
+
+expect_blocked_cwd "install --owner=root OUTSIDE (long attached + outside dest)" \
+  "install --owner=root $PROJECT/CHANGELOG.md /tmp/install_target_t27" \
+  "/tmp"
+
+expect_blocked_cwd "install --group=wheel OUTSIDE (long attached + outside dest)" \
+  "install --group=wheel $PROJECT/CHANGELOG.md /tmp/install_target_t27" \
+  "/tmp"
+
+expect_blocked_cwd "install -m0644 -o root --group=wheel OUTSIDE (mixed attached)" \
+  "install -m0644 -o root --group=wheel $PROJECT/CHANGELOG.md /tmp/install_target_t27" \
+  "/tmp"
+
+# True positive: POSIX `--` after attached flags still routes the
+# trailing positional through path validation.
+expect_blocked_cwd "install -m0644 -- OUTSIDE (attached then --)" \
+  "install -m0644 -- $PROJECT/CHANGELOG.md /tmp/install_target_t27" \
+  "/tmp"
+
+# False positives prevented: in-project destination, every shape.
+expect_allowed "install -m0644 IN_PROJECT (short attached, in-project dest)" \
+  "install -m0644 $PROJECT/CHANGELOG.md $PROJECT/tests/scratch_t27.txt"
+
+expect_allowed "install --mode=0644 IN_PROJECT (long attached, in-project dest)" \
+  "install --mode=0644 $PROJECT/CHANGELOG.md $PROJECT/tests/scratch_t27.txt"
+
+expect_allowed "install -oroot IN_PROJECT (short attached owner)" \
+  "install -oroot $PROJECT/CHANGELOG.md $PROJECT/tests/scratch_t27.txt"
+
+expect_allowed "install -gwheel IN_PROJECT (short attached group)" \
+  "install -gwheel $PROJECT/CHANGELOG.md $PROJECT/tests/scratch_t27.txt"
+
+# False positives prevented: mode/owner/group VALUES that look
+# like paths must NOT trigger the boundary check — they aren't
+# write destinations. Pins the explicit "no path-validation for
+# -mPATH / --mode=PATH" contract that 00d7300 replaced the
+# earlier `=*/*` heuristic with.
+expect_allowed_cwd "install --mode=/0644 IN_PROJECT (path-shaped mode value, ignored)" \
+  "install --mode=/0644 $PROJECT/CHANGELOG.md $PROJECT/tests/scratch_t27.txt" \
+  "/tmp"
+
+expect_allowed_cwd "install --owner=user/group IN_PROJECT (slash in owner, ignored)" \
+  "install --owner=user/group $PROJECT/CHANGELOG.md $PROJECT/tests/scratch_t27.txt" \
+  "/tmp"
+
+# Quoted attached forms behave identically to unquoted (strip_quotes
+# normalizes before the flag tests):
+expect_blocked_cwd "install \"-m0644\" OUTSIDE (quoted short attached)" \
+  "install \"-m0644\" $PROJECT/CHANGELOG.md /tmp/install_target_t27" \
+  "/tmp"
+
+expect_allowed_cwd "install \"--mode=0644\" IN_PROJECT (quoted long attached)" \
+  "install \"--mode=0644\" $PROJECT/CHANGELOG.md $PROJECT/tests/scratch_t27.txt" \
   "/tmp"
 
 echo ""

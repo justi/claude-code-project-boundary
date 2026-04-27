@@ -729,3 +729,54 @@ expect_blocked "pipe to bash -l" \
   'echo "cmd" | bash -l'
 
 echo ""
+
+# ============================================================
+# 50. Variable expansion is fail-closed (only $HOME allowed)
+#
+# The guard cannot inspect what `$P`, `${FILE}`, `$1`, `$@`, etc. resolve
+# to at exec time, so every non-HOME parameter expansion is refused with
+# the same fail-closed contract as `$(...)`. Documents the rule users
+# hit when they write `P=/path/to/file; grep X "$P"` style commands.
+# ============================================================
+echo "--- Variable expansion (fail-closed; only \$HOME allowed) ---"
+
+# BLOCKED — bare $VAR, ${VAR}, with attached/separated path forms
+expect_blocked "bare \$P operand"             'rm $P'
+expect_blocked "braced \${FILE} operand"      'cat ${FILE}'
+expect_blocked "\$VAR concatenated with path" 'rm $P/file'
+expect_blocked "\${VAR}/path concatenation"   'rm ${P}/file'
+expect_blocked "\$VAR inside double quotes"   'grep X "$P"'
+expect_blocked "\$VAR with underscore name"   'rm $foo_bar'
+expect_blocked "\$VAR as redirect target"     'echo x > $OUT'
+expect_blocked "\$VAR in for-loop body"       'for f in a b; do rm $f; done'
+
+# BLOCKED — positional and special parameters
+expect_blocked "positional \$1"               'rm $1'
+expect_blocked "special \$@"                  'rm $@'
+expect_blocked "special \$*"                  'rm $*'
+expect_blocked "special \$?"                  'echo $?'
+expect_blocked "special \$!"                  'echo $!'
+expect_blocked "special \$\$"                 'echo $$'
+expect_blocked "special \$#"                  'echo $#'
+
+# ALLOWED — $HOME passthrough (then resolved by expand_path)
+expect_allowed "bare \$HOME in echo"          'echo $HOME'
+expect_allowed "braced \${HOME} in echo"      'echo ${HOME}'
+
+# ALLOWED — non-expansion forms that share the $X prefix
+expect_allowed "ANSI-C quoted literal \$'...'"   "echo \$'literal\\n'"
+expect_allowed 'i18n quoted literal $"..."'      'echo $"some string"'
+
+# ALLOWED — literal $ (escaped or single-quoted)
+expect_allowed "backslash-escaped \\\$VAR"    'echo \$VAR'
+expect_allowed "single-quoted \$VAR"          "echo '\$VAR'"
+
+# ALLOWED — \$VAR inside a quoted heredoc body (body bytes blanked)
+expect_allowed "\$VAR inside quoted heredoc body" \
+  "git commit -F - <<'EOF'
+title
+
+body mentions \$VAR and \${FILE}
+EOF"
+
+echo ""

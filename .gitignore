@@ -1,3 +1,6 @@
 # Local Claude Code settings with workstation-specific permissions / paths.
 # Not portable across checkouts; keep out of history.
 .claude/
+
+# Revive plugin cache (per-checkout; not portable).
+.revive/
