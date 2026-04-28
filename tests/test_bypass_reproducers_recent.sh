@@ -1,15 +1,16 @@
 #!/bin/bash
-# Bypass reproducers (recent / sections 16-27) — heredoc parser,
+# Bypass reproducers (recent / sections 16-28) — heredoc parser,
 # multi-heredoc body ordering, quoted command-name, /bin prefix in
 # CMD_BLANKED, install / rsync walker fixes (POSIX `--`, attached
 # write-target white-list, quoted-option normalization), php attached
-# form, attached-flag behavior pinning.
+# form, attached-flag behavior pinning, rsync first-segment-only
+# remote-path skip.
 # Continuation of test_bypass_reproducers_core.sh; same TDD discipline.
 #
 # Sourced by test_guard.sh — requires helpers.sh loaded first.
 
 echo "========================================"
-echo "  Bypass reproducers (recent, sections 16-27)"
+echo "  Bypass reproducers (recent, sections 16-28)"
 echo "  PROJECT_DIR=$PROJECT"
 echo "========================================"
 echo ""
@@ -831,6 +832,55 @@ expect_blocked_cwd "install \"-m0644\" OUTSIDE (quoted short attached)" \
 
 expect_allowed_cwd "install \"--mode=0644\" IN_PROJECT (quoted long attached)" \
   "install \"--mode=0644\" $PROJECT/CHANGELOG.md $PROJECT/tests/scratch_t27.txt" \
+  "/tmp"
+
+# ============================================================
+# 28. rsync remote-path skip should require `:` in first segment
+# ------------------------------------------------------------
+# The rsync walker skipped any TARGET matching `=~ :` on the
+# assumption that a colon meant remote (host:path / user@host:path /
+# host::module / rsync://...). That blanket skip also dropped LOCAL
+# paths that legitimately contain a colon AFTER the first slash
+# (filenames like `a:b`, `tmp/a:b`, `../tmp/a:b`). With cwd outside
+# the project, such a target slipped past the boundary check and the
+# write landed at an unvalidated location.
+#
+# Concrete bypass:
+#   cwd=/tmp; rsync $PROJECT/src.txt ../tmp/a:b
+# The destination resolves to /tmp/a:b (outside project). Pre-fix the
+# `=~ :` test matched and `continue` skipped path validation entirely.
+# Post-fix the walker checks only the FIRST path segment for `:` (or
+# requires `rsync://` URL prefix), so local colons-after-slash fall
+# through to the existing path resolution and is_inside_project check.
+#
+# Reported by Copilot review on buildwithclaude PR #137
+# (plugins/project-boundary/hooks/lib/detectors/write_targets.sh:182).
+# ============================================================
+
+expect_blocked_cwd "rsync local target with colon AFTER slash (../tmp/a:b OUTSIDE)" \
+  "rsync $PROJECT/CHANGELOG.md ../tmp/a:b" \
+  "/tmp"
+
+expect_blocked_cwd "rsync local target with colon AFTER slash (./sub/a:b OUTSIDE)" \
+  "rsync $PROJECT/CHANGELOG.md ./sub/a:b" \
+  "/tmp"
+
+# Positives that must keep ALLOWED — the remote-path skip still applies
+# when the colon really does sit in the first segment.
+expect_allowed_cwd "rsync remote host:path (host: in first segment, skipped)" \
+  "rsync $PROJECT/CHANGELOG.md host:/dest" \
+  "/tmp"
+
+expect_allowed_cwd "rsync remote user@host:path (user@host: in first segment)" \
+  "rsync $PROJECT/CHANGELOG.md user@host:/dest" \
+  "/tmp"
+
+expect_allowed_cwd "rsync remote rsync:// URL (skipped via URL prefix)" \
+  "rsync $PROJECT/CHANGELOG.md rsync://host/dest" \
+  "/tmp"
+
+expect_allowed_cwd "rsync local target with colon-after-slash IN_PROJECT" \
+  "rsync $PROJECT/CHANGELOG.md $PROJECT/tests/scratch_t28:b" \
   "/tmp"
 
 echo ""
