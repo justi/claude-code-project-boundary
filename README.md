@@ -25,8 +25,8 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `wget -O` / `wget --output-document` | Allowed | **Blocked** |
 | `find -delete` / `find -exec rm` | Allowed | **Blocked** |
 | `dd of=` | Allowed | **Blocked** |
-| `install` (source and destination) | Allowed | **Blocked** |
-| `rsync` (source and destination) | Allowed | **Blocked** |
+| `install` (source, destination, `--target-directory=`) | Allowed | **Blocked** |
+| `rsync` (source, destination, `--log-file=`, `--partial-dir=`, `--backup-dir=`, `--temp-dir=`, `--write-batch=`, `--only-write-batch=`) | Allowed | **Blocked** |
 | `tar -C` / `--directory=` | Allowed | **Blocked** |
 | `unzip -d` / `cpio -D` | Allowed | **Blocked** |
 | **Edit** tool (file edits) | Allowed | **Blocked** |
@@ -41,14 +41,17 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `eval '...'` | Cannot safely parse evaluated code |
 | Piping to `sh` / `bash` | Inner commands invisible to guard |
 | `xargs rm/mv/cp/...` | Arguments cannot be validated |
+| `python -c` / `ruby -e` / `perl -e` / `node --eval` / `php -r/-R/--run` / `Rscript -e` / `osascript -e` | Inline interpreter code is opaque to the Bash parser |
+| `awk '... system("...") ...'` (and similar `\| "sh"`) | Awk programs can shell out without the guard seeing the inner command |
+| `env -S` / `env --split-string` / `env -C` / `env --chdir` | These either smuggle a real command inside a string or change the working directory before the inner tool runs |
 | `$(...)` / backticks (outside single quotes) | Command substitution target is uninspectable. Single-quoted forms like `'$(cmd)'` and arithmetic expansion `$((2+2))` are allowed. |
-| `$VAR` / `${VAR}` operands (outside single quotes) | Variable expansion target is uninspectable for the same reason as `$(...)`. Only `$HOME` is allowed (canonical home path). Use literal values inline, or reach for the `Read` / `Grep` tools instead of piping shell vars. ANSI-C `$'…'`, i18n `$"…"`, backslash-escaped `\$VAR`, single-quoted `'$VAR'`, and quoted-heredoc bodies are unaffected. |
+| `$VAR` / `${VAR}` and positional / special parameters (`$1` … `$9`, `$@`, `$*`, `$#`, `$?`, `$$`, `$!`, `$-`) outside single quotes | Variable expansion target is uninspectable for the same reason as `$(...)`. Only `$HOME` / `${HOME}` is allowed (canonical home path). Use literal values inline, or reach for the `Read` / `Grep` tools instead of piping shell vars. ANSI-C `$'…'`, i18n `$"…"`, backslash-escaped `\$VAR`, single-quoted `'$VAR'`, and quoted-heredoc bodies are unaffected. |
 
 ### Additional protections
 
 - **Chained commands** — splits on `;`, `&&`, `||`, `|`, and unquoted newlines, then checks each sub-command independently
 - **`cwd` awareness** — uses `cwd` from the hook event, so commands run outside the project (without an explicit `cd`) are also guarded
-- **`cd` tracking** — `cd /tmp && rm -rf something` is blocked because `cd` left the project; `cd $PROJECT && rm file` is allowed even if the event `cwd` was outside
+- **`cd` tracking** — `cd /tmp && rm -rf something` is blocked because `cd` left the project; `cd ~/your-repo && rm file` is allowed even if the event `cwd` was outside (`$PROJECT` and other non-`$HOME` variables are uninspectable, so use `~`/`$HOME` or a literal path)
 - **Destructive subcommands outside project** — when running outside the project (via event `cwd` or `cd`), these are blocked: `git clean -f`, `git checkout .`, `git restore .`, `git reset --hard`, `git push --force`, `git stash drop/clear`, `git branch -D`, `git reflog expire`, `rails db:drop/reset`, `rake db:drop/reset`. Safe commands like `git status`, `git log`, `rails routes` remain allowed.
 - **`sudo` prefix** — stripped before checking, so `sudo rm /etc/passwd` is still blocked
 - **`find` options** — handles `-L`, `-H`, `-P` before the search path
@@ -56,10 +59,13 @@ Allows destructive operations **within your project** but blocks them **outside*
 - **`~` and `$HOME` expansion** — `rm ~/file` and `rm $HOME/file` are correctly detected as outside-project
 - **Symlink resolution** — handles macOS `/var` → `/private/var`, dereferences symlink chains in Edit/Write/MultiEdit (fail-closed after 20 hops)
 - **`/dev/null` bit-bucket** — `curl -o /dev/null`, `2>/dev/null`, `tee /dev/null`, `dd of=/dev/null`, and all redirect target forms are allowed so routine probe and silencing workflows don't hit the boundary. Narrow exemption: the discard-only walkers short-circuit *before* `is_write_permitted`; `sed -i /dev/null`, `truncate /dev/null`, and `cp|mv|ln ... /dev/null` remain blocked because each performs a real filesystem write under `/dev/`.
+- **POSIX `--` end-of-options** — `install`, `rsync`, `sed -i`, and `truncate` continue parsing operands after a literal `--`, so `rsync … -- -outside/file` and similar dash-prefixed targets are validated rather than silently skipped as flags.
 
 ### Path allowlist (`hooks/allowlist.conf`)
 
 Some paths legitimately live outside every project — e.g. Claude Code's auto-memory under `~/.claude/projects/<slug>/memory/`, which needs to persist across projects by design. The allowlist file lets you permit writes to those paths without loosening the project boundary for everything else.
+
+**Scope:** the allowlist is a **WRITE exception only**. It applies to the gentle write paths — `Edit` / `Write` / `MultiEdit`, redirects (`>` / `>>`), `tee`, `curl -o`, `wget -O`, `dd of=`, and similar — and to `cd` into an allowlisted directory. It deliberately does **not** apply to destructive or move/copy operations (`rm`, `mv`, `cp`, `ln`, `chmod`, `chown`, `find -delete`, `find -exec rm`, `install`, `rsync`, `tar -C`, `unzip -d`, `cpio -D`) or to script execution and shell redirection from outside paths. An allowlist entry that grants WRITE to `~/.claude/projects/*/memory/**` will **not** let `rm` or `rsync` run against that path.
 
 **Format:** one glob pattern per line; `#` starts a comment; `~` expands to `$HOME`; `**` matches across path segments (bash globstar), `*` within a single segment.
 
