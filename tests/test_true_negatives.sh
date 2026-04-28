@@ -674,3 +674,55 @@ expect_allowed_cwd "rsync \"--\" src dest (double-quoted --, cwd=/tmp)" \
   "rsync \"--\" $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt" "/tmp"
 
 echo ""
+
+# ============================================================
+# Inline-interpreter / awk-system detector must skip quoted-heredoc body
+# ------------------------------------------------------------
+# `python -c`, `ruby -e`, `node --eval`, `php -r/-R/--run`, and
+# `awk '... system(...) ...'` are unconditionally fail-closed when they
+# appear as live command-line forms. The detectors used to scan the
+# CMD view that has command-name normalisation but NOT
+# blank_quoted_heredoc_bodies — so a tee/cat heredoc whose body merely
+# *mentioned* one of these patterns (e.g. a commit message describing
+# the rule, a doc string, a code review draft) was wrongly rejected.
+#
+# Concrete false positive: `git commit -F - <<'EOF' ... awk … system(…)
+# ... EOF` blocked the tooling's own commit messages even though the
+# body is literal stdin bytes that bash never executes.
+# ============================================================
+echo "--- inline-interpreter / awk detectors must skip quoted-heredoc body ---"
+
+expect_allowed "tee with quoted-heredoc body mentioning awk system() (data)" \
+  "tee $PROJECT/tests/scratch_awksys.txt <<'EOF'
+awk 'BEGIN{system(\"ls\")}'
+EOF"
+
+expect_allowed "tee with quoted-heredoc body mentioning python -c (data)" \
+  "tee $PROJECT/tests/scratch_pyc.txt <<'EOF'
+The python -c form is fail-closed.
+EOF"
+
+expect_allowed "tee with quoted-heredoc body mentioning ruby -e (data)" \
+  "tee $PROJECT/tests/scratch_rbe.txt <<'EOF'
+Use ruby -e 'puts 1' is uninspectable.
+EOF"
+
+expect_allowed "tee with quoted-heredoc body mentioning php -r (data)" \
+  "tee $PROJECT/tests/scratch_phpr.txt <<'EOF'
+The php -r 'echo 1;' inline form is blocked.
+EOF"
+
+expect_allowed "tee with quoted-heredoc body mentioning awk pipe to sh (data)" \
+  "tee $PROJECT/tests/scratch_awksh.txt <<'EOF'
+awk '{print}' | sh is also caught.
+EOF"
+
+# Live forms — must still be BLOCKED. Locks the regression so the fix
+# does not over-relax the detector beyond the heredoc body case.
+expect_blocked "live awk 'BEGIN{system(...)}' on command line" \
+  "awk 'BEGIN{system(\"ls\")}' $PROJECT/CHANGELOG.md"
+
+expect_blocked "live python -c on command line" \
+  "python -c 'print(1)'"
+
+echo ""
