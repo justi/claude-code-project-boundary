@@ -42,10 +42,11 @@ Allows destructive operations **within your project** but blocks them **outside*
 | Piping to `sh` / `bash` | Inner commands invisible to guard |
 | `xargs rm/mv/cp/...` | Arguments cannot be validated |
 | `$(...)` / backticks (outside single quotes) | Command substitution target is uninspectable. Single-quoted forms like `'$(cmd)'` and arithmetic expansion `$((2+2))` are allowed. |
+| `$VAR` / `${VAR}` operands (outside single quotes) | Variable expansion target is uninspectable for the same reason as `$(...)`. Only `$HOME` is allowed (canonical home path). Use literal values inline, or reach for the `Read` / `Grep` tools instead of piping shell vars. ANSI-C `$'…'`, i18n `$"…"`, backslash-escaped `\$VAR`, single-quoted `'$VAR'`, and quoted-heredoc bodies are unaffected. |
 
 ### Additional protections
 
-- **Chained commands** — splits on `;`, `&&`, `||`, `|` and checks each sub-command independently
+- **Chained commands** — splits on `;`, `&&`, `||`, `|`, and unquoted newlines, then checks each sub-command independently
 - **`cwd` awareness** — uses `cwd` from the hook event, so commands run outside the project (without an explicit `cd`) are also guarded
 - **`cd` tracking** — `cd /tmp && rm -rf something` is blocked because `cd` left the project; `cd $PROJECT && rm file` is allowed even if the event `cwd` was outside
 - **Destructive subcommands outside project** — when running outside the project (via event `cwd` or `cd`), these are blocked: `git clean -f`, `git checkout .`, `git restore .`, `git reset --hard`, `git push --force`, `git stash drop/clear`, `git branch -D`, `git reflog expire`, `rails db:drop/reset`, `rake db:drop/reset`. Safe commands like `git status`, `git log`, `rails routes` remain allowed.
@@ -71,7 +72,6 @@ Some paths legitimately live outside every project — e.g. Claude Code's auto-m
 ### Known limitations
 
 - Paths with spaces work when properly quoted (single or double quotes). Unquoted paths with spaces are not supported.
-- Heredoc body contents are not inspected (only the first line of the command, where redirects are handled normally)
 - Brace expansion (`{a,b,c}`) is not enumerated — literal match only
 - `~user/` (home of another user) is not expanded; only `~/` (current user) is handled
 
@@ -79,25 +79,23 @@ Some paths legitimately live outside every project — e.g. Claude Code's auto-m
 
 The common idiom `git commit -m "$(cat <<'EOF' … EOF)"` is **blocked on purpose** — command substitution `$(…)` is fail-closed because the inner command is not inspectable in the general case (`$(cat && rm /etc/passwd)` looks identical to the parser). Making an exception for one shape of `cat` would just open a new bypass category.
 
-Equivalent patterns that pass the guard:
+The supported pattern is heredoc on stdin:
 
 ```bash
-# A) Heredoc piped on stdin — no $(), just a redirect
 git commit -F - <<'EOF'
 Subject line
 
 Body paragraph.
 EOF
+```
 
-# B) Write the message to a file, commit from file
-# (this is what Claude Code falls back to automatically)
-git commit -F .git/COMMIT_EDITMSG_DRAFT
+Repeated `-m` works for shorter messages where every paragraph fits on one line:
 
-# C) Repeated -m: each flag becomes one paragraph
+```bash
 git commit -m "Subject line" -m "Body paragraph."
 ```
 
-When Claude Code hits the block it will transparently switch to pattern **B** — cost is one extra tool call (Write + Bash instead of single Bash). No user action needed: the plugin registers a `SessionStart` hook that injects a one-line hint into every session, so Claude picks the right workaround on the first try.
+Avoid: writing the message to `.git/COMMIT_*` files (triggers a Write-tool prompt) or to `/tmp/*_msg.txt` (outside-project, blocked). The `SessionStart` hook ships a one-line hint that points Claude at the heredoc form on the first try, so no manual nudging is needed.
 
 ## Install
 
