@@ -726,3 +726,163 @@ expect_blocked "live python -c on command line" \
   "python -c 'print(1)'"
 
 echo ""
+echo "--- Remote-dispatch class: arguments target a remote/foreign filesystem ---"
+# Issue #21. The boundary plugin protects the LOCAL filesystem; commands that
+# dispatch their operands to a remote host or container filesystem must not
+# trip the local-path walkers. Generic shape: a verb (or two-word verb) marks
+# the operands as remote, and the local-side surface (if any) is the only
+# part the guard validates.
+
+# A) Pure remote-fs tools — every operand is remote.
+expect_allowed "scp upload to host:/path" \
+  "scp ./local.md remote-host:/tmp/draft.md"
+
+expect_allowed "scp download from host:/path to local cwd" \
+  "scp remote-host:/tmp/draft.md ."
+
+expect_allowed "scp -i key upload" \
+  "scp -i ~/.ssh/id_ed25519 ./local.md user@remote-host:/tmp/draft.md"
+
+expect_allowed "rcp upload" \
+  "rcp ./local.md remote-host:/tmp/draft.md"
+
+expect_allowed "sftp batch put" \
+  "sftp -b /tmp/batch.txt user@remote-host"
+
+# B) ssh with quoted remote command — opaque after host.
+expect_allowed "ssh + quoted docker cp inside" \
+  "ssh remote-host \"docker cp /tmp/draft.md container:/tmp/\""
+
+expect_allowed "ssh + quoted chained remote commands" \
+  "ssh remote-host \"docker cp /tmp/x.md c:/tmp/ && docker exec c bin/rails runner /tmp/x.rb\""
+
+expect_allowed "ssh + remote rm of /etc/x (remote fs, not local)" \
+  "ssh user@host \"rm -rf /etc/old\""
+
+expect_allowed "ssh + remote tee to /var/log" \
+  "ssh user@host \"tee /var/log/app.log\""
+
+# C) docker cp host<->container — only the local operand is checked.
+expect_allowed "docker cp local-to-container" \
+  "docker cp /tmp/draft.md container_id:/tmp/draft.md"
+
+expect_allowed "docker cp container-to-local cwd" \
+  "docker cp container_id:/tmp/x.log ."
+
+expect_allowed "podman cp local-to-container" \
+  "podman cp /tmp/x.md mycontainer:/data/x.md"
+
+expect_allowed "kubectl cp local-to-pod" \
+  "kubectl cp /tmp/x.md mypod:/data/x.md"
+
+expect_allowed "kubectl cp pod-to-local cwd" \
+  "kubectl cp mypod:/data/x.md ."
+
+# D) docker/podman exec — opaque after container id.
+expect_allowed "docker exec running rm on container fs" \
+  "docker exec container_id rm -rf /var/cache"
+
+expect_allowed "docker exec running tee inside container" \
+  "docker exec -i container_id tee /etc/app.conf"
+
+expect_allowed "podman exec running mv inside container" \
+  "podman exec mycontainer mv /etc/a /etc/b"
+
+# E) docker / podman run — NOT collapsed (bind mounts can surface host
+# paths into the container; collapsing would let `-v /tmp:/data alpine
+# tee /data/x.md` write to host /tmp without a boundary check). The
+# existing walkers fire — false positives on no-mount runs are
+# accepted as the conservative default until mount-source parsing
+# lands. (Copilot review on PR #22.)
+expect_blocked "docker run rm inside container — blocked (no host-mount parser yet)" \
+  "docker run --rm alpine rm -rf /var/cache"
+
+expect_blocked "docker run with bind mount writing to host via container path" \
+  "docker run --rm -v /tmp:/data alpine tee /data/x.md"
+
+# F) kubectl exec / oc exec — opaque after pod and after `--`.
+expect_allowed "kubectl exec rm inside pod" \
+  "kubectl exec mypod -- rm -rf /var/cache"
+
+expect_allowed "kubectl exec -c container rm" \
+  "kubectl exec mypod -c app -- rm -rf /tmp/x"
+
+expect_allowed "oc exec rm inside pod" \
+  "oc exec mypod -- rm -rf /var/cache"
+
+# G) lxc exec — opaque after container (foreign fs).
+expect_allowed "lxc exec rm" \
+  "lxc exec mycontainer -- rm -rf /var/cache"
+
+# nsenter / chroot execute on the LOCAL host (different namespace /
+# apparent root) — the inner command can still touch host paths
+# outside the project, so they are NOT in the dispatch list and the
+# rm walker stays in effect. (Copilot review on PR #22.)
+expect_blocked "nsenter rm — local host, walker stays in effect" \
+  "nsenter -t 1234 -m -u -n rm -rf /tmp/foo"
+
+expect_blocked "chroot rm — local host, walker stays in effect" \
+  "chroot /mnt/sysimage rm -rf /etc/foo"
+
+# Lock: remote-dispatch ONLY blanks remote portion. The LOCAL prefix of a
+# chained command must still get a strict check. These verify the patch
+# does not over-relax destructive ops.
+expect_blocked "scp before destructive local rm /etc — local rm still blocked" \
+  "scp ./x remote-host:/tmp/x && rm -rf /etc/foo"
+
+expect_blocked "ssh before destructive local rm /etc — local rm still blocked" \
+  "ssh host \"echo hi\" && rm -rf /etc/foo"
+
+expect_blocked "docker exec before destructive local rm /etc" \
+  "docker exec c ls && rm -rf /etc/foo"
+
+# Lock: bare names that COINCIDE with remote-dispatch verbs but lack the
+# dispatch shape (no quoted remote-cmd, no container operand) are still
+# subject to the normal walkers — we only relax when the dispatch shape
+# is unambiguous.
+expect_blocked "ssh-shaped local cp via cp command-name still blocked" \
+  "cp /etc/passwd $PROJECT/leak"
+
+# Lock: docker cp / kubectl cp DOWNLOAD mode — local destination outside
+# project must still be blocked. The remote_dispatch rewrite preserves
+# the local-side dst operand for the cp walker so this case stays caught.
+expect_blocked "docker cp download to /etc destination" \
+  "docker cp container_id:/tmp/x /etc/owned"
+
+expect_blocked "kubectl cp download to /etc destination" \
+  "kubectl cp mypod:/tmp/x /etc/owned"
+
+expect_blocked "podman cp download to outside-project destination" \
+  "podman cp mycontainer:/tmp/x /private/tmp/outside.md"
+
+# Lock: kubectl/oc cp flags-with-value can appear AFTER the positionals
+# (cobra/pflag allows this). Without per-verb flag-value awareness, the
+# flag's value would shadow the real destination and the rewrite would
+# emit `cp <flag-value>` (often a relative name resolving inside the
+# project). The walker must consume `--namespace default`, `-c name`,
+# `--kubeconfig <path>`, etc. as a single flag+value pair so the real
+# local destination still gets validated. (Copilot review on PR #22.)
+expect_blocked "kubectl cp download with trailing --namespace default" \
+  "kubectl cp mypod:/tmp/x /etc/owned --namespace default"
+
+expect_blocked "kubectl cp download with leading --namespace default" \
+  "kubectl cp --namespace default mypod:/tmp/x /etc/owned"
+
+expect_blocked "kubectl cp download with trailing --namespace=default attached" \
+  "kubectl cp mypod:/tmp/x /etc/owned --namespace=default"
+
+expect_blocked "kubectl cp download with -n short flag" \
+  "kubectl cp mypod:/tmp/x /etc/owned -n default"
+
+expect_blocked "kubectl cp download with -c container flag" \
+  "kubectl cp mypod:/tmp/x /etc/owned -c app"
+
+expect_blocked "oc cp download with trailing --namespace default" \
+  "oc cp mypod:/tmp/x /etc/owned --namespace default"
+
+# Lock for the upload side: same flag layout must NOT trip a false
+# positive on the local source.
+expect_allowed "kubectl cp upload with trailing --namespace default" \
+  "kubectl cp /tmp/x.md mypod:/data/x.md --namespace default"
+
+echo ""

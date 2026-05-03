@@ -37,6 +37,8 @@ source "$_GUARD_DIR/lib/detectors/destructive.sh"
 source "$_GUARD_DIR/lib/detectors/write_targets.sh"
 # shellcheck source=lib/options.sh
 source "$_GUARD_DIR/lib/options.sh"
+# shellcheck source=lib/remote_dispatch.sh
+source "$_GUARD_DIR/lib/remote_dispatch.sh"
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
@@ -851,6 +853,34 @@ check_single_command() {
       fi
     fi
   fi
+
+  # --- Neutralise remote-dispatch commands before path walkers run ---
+  # Issue #21. ssh / scp / docker exec / kubectl exec / etc. dispatch
+  # their operands to a remote host or foreign (container/namespace)
+  # filesystem. The boundary plugin protects the LOCAL filesystem, so
+  # those operands must be removed before the cp/tee/rm/redirect/...
+  # walkers run — otherwise a quoted remote command like
+  # `ssh host "docker cp /tmp/x container:/y"` produces a false-positive
+  # block on `/tmp/x` (the cp regex matches the literal ` cp ` inside
+  # the quoted argument). Policy checks earlier in this function
+  # (bash -c, $VAR, $(...), heredoc-fed-shell, script execution) MUST
+  # remain on the original CMD because those events happen LOCALLY,
+  # before ssh / docker ever see the argument string. The rewrite here
+  # only narrows what the path walkers see; CMD_TOKENS / CMD_BLANKED /
+  # CMD_TOKENS_SCAN are regenerated so every detector sees a consistent
+  # view. Generic for the whole class — see hooks/lib/remote_dispatch.sh.
+  CMD=$(rewrite_remote_dispatch "$CMD")
+  CMD_BLANKED=$(rewrite_remote_dispatch "$CMD_BLANKED")
+  CMD_TOKENS=()
+  while IFS= read -r tok; do
+    [[ -z "$tok" ]] && continue
+    CMD_TOKENS+=("$tok")
+  done < <(tokenize_args "$CMD")
+  CMD_TOKENS_SCAN=()
+  while IFS= read -r tok; do
+    [[ -z "$tok" ]] && continue
+    CMD_TOKENS_SCAN+=("$tok")
+  done < <(tokenize_args "$CMD_BLANKED")
 
   # xargs, find-delete, rm, mv, cp, ln moved to hooks/lib/detectors/destructive.sh.
   run_destructive_detectors
