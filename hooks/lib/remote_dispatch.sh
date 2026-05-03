@@ -12,26 +12,48 @@
 # detectors only see the local-side surface (or nothing, when there
 # is no local surface):
 #
-#   1. Pure remote-fs tools  — every operand is remote/network.
+#   1. Network-copy tools — operate on a remote target but may also
+#      take local operands and -flag values. The point of this class
+#      is that the remote `host:/path` / `host::module` / `rsync://`
+#      operands must NOT be walked as local filesystem paths;
+#      legitimate local operands (`scp ./key host:/dst` etc.) are
+#      reads from the plugin's perspective and the boundary doesn't
+#      police those.
 #        scp / rcp / sftp
 #      Rewrite: collapse CMD to the bare verb name.
 #
 #   2. Remote-command dispatch — `<verb> [opts] <target> <opaque-cmd>`,
-#      where the target is a host / container / pod / process and the
-#      trailing tokens form a command executed on that target.
-#        ssh / nsenter / chroot
-#        docker exec | docker run
-#        podman exec | podman run
-#        kubectl exec | oc exec | crictl exec
-#        lxc exec
+#      where the target is a host / container / pod and the trailing
+#      tokens form a command executed on a foreign filesystem (NOT
+#      the local one this guard protects):
+#        ssh
+#        docker exec | podman exec
+#        kubectl exec | oc exec | crictl exec | lxc exec
 #      Rewrite: collapse CMD to the verb prefix only.
+#
+#      `nsenter` and `chroot` are deliberately EXCLUDED — they
+#      execute on the local host (just under a different namespace
+#      or apparent root), so their command operands can still touch
+#      host paths outside the project and must remain subject to the
+#      destructive walkers (Copilot review on PR #22).
+#
+#      `docker run` / `podman run` / `buildah run` are also EXCLUDED
+#      because the `-v src:dst` / `--volume` / `--mount type=bind,…`
+#      flags can bind-mount host paths into the container, turning a
+#      container-side write into a host-fs write that bypasses the
+#      boundary. Until host-mount-source parsing is added, leaving
+#      them subject to the existing walkers errs on the safe side
+#      (Copilot review on PR #22).
 #
 #   3. Remote file copy with mixed local / remote operands —
 #      `<verb> <subverb> <a> <b>` where one operand has the form
 #      `<id>:<path>` and the other is local.
 #        docker cp | podman cp | kubectl cp | oc cp
-#      Rewrite: keep the verb prefix and the LOCAL operand only;
-#      drop every operand that matches the `<id>:<path>` pattern.
+#      Rewrite: keep only the LOCAL DESTINATION operand (last
+#      positional, when not remote-shaped) so the cp walker still
+#      validates download targets like `… c:/x /etc/owned`. Source
+#      operands are dropped — local source = read (not policed),
+#      remote source = foreign filesystem.
 #
 # Depends on tokenize_args / strip_quotes from hooks/lib/tokenize.sh.
 # Pure (no caller-scope dependencies); returns the rewritten command
@@ -136,16 +158,20 @@ rewrite_remote_dispatch() {
       return ;;
   esac
 
-  # Class 2: two-word remote-command dispatch verbs.
+  # Class 2: two-word remote-command dispatch verbs. `docker run` /
+  # `podman run` / `buildah run` are intentionally NOT in this list —
+  # see the header comment for the bind-mount rationale.
   case "$verb $subverb" in
-    "docker exec"|"docker run"|"podman exec"|"podman run"|"kubectl exec"|"oc exec"|"crictl exec"|"lxc exec"|"buildah run")
+    "docker exec"|"podman exec"|"kubectl exec"|"oc exec"|"crictl exec"|"lxc exec")
       printf '%s %s' "$verb" "$subverb"
       return ;;
   esac
 
-  # Class 2: one-word remote-command dispatch verbs.
+  # Class 2: one-word remote-command dispatch verbs. `nsenter` and
+  # `chroot` are intentionally NOT in this list — see the header
+  # comment for why they remain subject to the local walkers.
   case "$verb" in
-    ssh|nsenter|chroot)
+    ssh)
       printf '%s' "$verb"
       return ;;
   esac

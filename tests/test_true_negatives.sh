@@ -788,11 +788,16 @@ expect_allowed "docker exec running tee inside container" \
 expect_allowed "podman exec running mv inside container" \
   "podman exec mycontainer mv /etc/a /etc/b"
 
-# E) docker/podman run — opaque after image.
-expect_allowed "docker run with rm inside" \
+# E) docker / podman run — NOT collapsed (bind mounts can surface host
+# paths into the container; collapsing would let `-v /tmp:/data alpine
+# tee /data/x.md` write to host /tmp without a boundary check). The
+# existing walkers fire — false positives on no-mount runs are
+# accepted as the conservative default until mount-source parsing
+# lands. (Copilot review on PR #22.)
+expect_blocked "docker run rm inside container — blocked (no host-mount parser yet)" \
   "docker run --rm alpine rm -rf /var/cache"
 
-expect_allowed "docker run with bind mount and tee inside" \
+expect_blocked "docker run with bind mount writing to host via container path" \
   "docker run --rm -v /tmp:/data alpine tee /data/x.md"
 
 # F) kubectl exec / oc exec — opaque after pod and after `--`.
@@ -805,12 +810,19 @@ expect_allowed "kubectl exec -c container rm" \
 expect_allowed "oc exec rm inside pod" \
   "oc exec mypod -- rm -rf /var/cache"
 
-# G) lxc exec / nsenter / chroot — opaque after target.
+# G) lxc exec — opaque after container (foreign fs).
 expect_allowed "lxc exec rm" \
   "lxc exec mycontainer -- rm -rf /var/cache"
 
-expect_allowed "nsenter into pid running rm" \
+# nsenter / chroot execute on the LOCAL host (different namespace /
+# apparent root) — the inner command can still touch host paths
+# outside the project, so they are NOT in the dispatch list and the
+# rm walker stays in effect. (Copilot review on PR #22.)
+expect_blocked "nsenter rm — local host, walker stays in effect" \
   "nsenter -t 1234 -m -u -n rm -rf /tmp/foo"
+
+expect_blocked "chroot rm — local host, walker stays in effect" \
+  "chroot /mnt/sysimage rm -rf /etc/foo"
 
 # Lock: remote-dispatch ONLY blanks remote portion. The LOCAL prefix of a
 # chained command must still get a strict check. These verify the patch
