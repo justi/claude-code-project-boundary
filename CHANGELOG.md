@@ -5,6 +5,27 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] — 2026-05-03
+
+### Fixed — closes issue #21 (remote-dispatch false positives)
+
+- **`ssh "<remote-cmd>"` no longer false-positives.** The local-path walkers (cp / tee / rm / redirect / …) used to match the literal command bytes inside the quoted argument, so workflows like `ssh host "docker cp /tmp/x container:/y && docker exec c bin/rails runner /tmp/x"` returned `BLOCKED: 'cp' argument '/private/tmp/x' is OUTSIDE …`. Generic neutralisation in `hooks/lib/remote_dispatch.sh` rewrites recognised remote-dispatch verbs before the walkers run, so only the **local** surface is policed.
+- Three universal shapes covered:
+  - **Network-copy tools** — `scp` / `rcp` / `sftp`. Operands of the universal `<host>:<path>` / `<host>::<module>` / `rsync://…` form are no longer walked as local paths.
+  - **Remote-command dispatch** — `ssh`, `docker exec`, `podman exec`, `kubectl exec`, `oc exec`, `crictl exec`, `lxc exec`. The trailing command string runs on a foreign filesystem; collapsing CMD to the verb prefix removes the false positive while keeping all earlier policy checks (`bash -c`, `$VAR`, `$(...)`, heredoc-fed shell, script execution) untouched — those still fire on the original CMD because they happen LOCALLY before ssh / docker ever sees the argument string.
+  - **Remote file copy with mixed operands** — `docker cp`, `podman cp`, `kubectl cp`, `oc cp`. The rewrite preserves the local DESTINATION operand (last positional, when not remote-shaped) so the cp walker still catches downloads to `/etc/owned`. Source operands are dropped — local source is a read (not policed), remote source is a foreign filesystem.
+
+### Hardening — Copilot review follow-ups on PR #22
+
+- **`nsenter` / `chroot` deliberately NOT in the dispatch list.** Both execute on the local host (different namespace / apparent root), so their command operands can still touch host paths outside the project. Collapsing them would have been a security regression: `chroot / rm -rf /etc` would no longer block. Round-1 fix on Copilot review removed them.
+- **`docker run` / `podman run` / `buildah run` deliberately NOT in the dispatch list either.** The `-v src:dst` / `--volume` / `--mount type=bind,…` flags can bind-mount host paths into the container, turning a container-side write into a host-fs write. With CMD collapsed, `docker run -v /tmp:/data alpine tee /data/x.md` would silently write host `/tmp/x.md`. Pending host-mount-source parsing in a follow-up — until then, leaving them subject to the existing walkers errs on the safe side.
+- **`kubectl cp` / `oc cp` flag-value bypass closed.** cobra/pflag lets flags appear before AND after positionals, so `kubectl cp pod:/x /etc/owned --namespace default` slipped past the previous walker (the value `default` became the last positional, rewrite emitted `cp default` → resolved inside project → ALLOWED, while the real download destination `/etc/owned` was never validated). Round-2 fix added a per-verb table of flags that consume the next token (short + long forms, including POSIX `--` end-of-options and `--flag=value` attached form). Regression tests pin every shape of the bypass.
+
+### Tests
+
+- 39 new cases across `tests/test_true_negatives.sh` covering each remote-dispatch verb plus the 3 sub-classes (collapse / remote-only / cp-positional). 4 lock tests confirm chained `scp ./x remote-host:/y && rm -rf /etc/foo` keeps blocking the local rm; 7 regression tests for `kubectl cp` / `oc cp` flag-value layouts (leading, trailing, attached, short flag, POSIX `--`).
+- Suite total: **873 / 873 green** (was 834 baseline → +39).
+
 ## [1.8.0] — 2026-04-27
 
 ### Security — closes 3 bypass categories in `install` / `rsync` walkers
