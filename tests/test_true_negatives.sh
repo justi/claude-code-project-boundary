@@ -855,4 +855,34 @@ expect_blocked "kubectl cp download to /etc destination" \
 expect_blocked "podman cp download to outside-project destination" \
   "podman cp mycontainer:/tmp/x /private/tmp/outside.md"
 
+# Lock: kubectl/oc cp flags-with-value can appear AFTER the positionals
+# (cobra/pflag allows this). Without per-verb flag-value awareness, the
+# flag's value would shadow the real destination and the rewrite would
+# emit `cp <flag-value>` (often a relative name resolving inside the
+# project). The walker must consume `--namespace default`, `-c name`,
+# `--kubeconfig <path>`, etc. as a single flag+value pair so the real
+# local destination still gets validated. (Copilot review on PR #22.)
+expect_blocked "kubectl cp download with trailing --namespace default" \
+  "kubectl cp mypod:/tmp/x /etc/owned --namespace default"
+
+expect_blocked "kubectl cp download with leading --namespace default" \
+  "kubectl cp --namespace default mypod:/tmp/x /etc/owned"
+
+expect_blocked "kubectl cp download with trailing --namespace=default attached" \
+  "kubectl cp mypod:/tmp/x /etc/owned --namespace=default"
+
+expect_blocked "kubectl cp download with -n short flag" \
+  "kubectl cp mypod:/tmp/x /etc/owned -n default"
+
+expect_blocked "kubectl cp download with -c container flag" \
+  "kubectl cp mypod:/tmp/x /etc/owned -c app"
+
+expect_blocked "oc cp download with trailing --namespace default" \
+  "oc cp mypod:/tmp/x /etc/owned --namespace default"
+
+# Lock for the upload side: same flag layout must NOT trip a false
+# positive on the local source.
+expect_allowed "kubectl cp upload with trailing --namespace default" \
+  "kubectl cp /tmp/x.md mypod:/data/x.md --namespace default"
+
 echo ""

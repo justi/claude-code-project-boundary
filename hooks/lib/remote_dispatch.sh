@@ -121,6 +121,18 @@ _rd_strip_path_prefix() {
   esac
 }
 
+# --- Whitespace-list membership check ---
+# $1 = needle, $2 = space-separated haystack. Used to decide whether a
+# given short or long flag consumes the next token as its value.
+_rd_flag_takes_value() {
+  local needle="$1"
+  local short_list="$2"
+  local long_list="$3"
+  case " $short_list " in *" $needle "*) return 0 ;; esac
+  case " $long_list "  in *" $needle "*) return 0 ;; esac
+  return 1
+}
+
 # --- Main entry: rewrite remote-dispatch commands ---
 # In:  full CMD string
 # Out: CMD string with remote portions removed; unchanged for non-dispatch verbs.
@@ -186,22 +198,73 @@ rewrite_remote_dispatch() {
 # value-less or take non-path values).
 _rd_rewrite_remote_copy() {
   local v_idx="$1"
+  local verb_pair="${_RD_TOKS[$v_idx]} ${_RD_TOKS[$((v_idx + 1))]}"
   local k=$((v_idx + 2)) n=${#_RD_TOKS[@]}
+
+  # Per-verb flags-that-consume-the-next-token list. Necessary because
+  # Copilot review on PR #22 flagged a download-mode bypass shape:
+  #   `kubectl cp pod:/x /etc/owned --namespace default`
+  # without this table, `default` (the value of `--namespace`) gets
+  # added to the positionals list, becomes the LAST positional, and
+  # the rewrite emits `cp default` — relative path resolved inside
+  # the project → ALLOWED, missing the real download destination
+  # `/etc/owned`. cobra/pflag (used by kubectl/oc) lets flags appear
+  # before AND after positionals, so we can't just stop after the
+  # first non-flag token.
+  #
+  # docker cp / podman cp share a small flag set with no value-taking
+  # flags relevant to the path-walker bypass (`-a/--archive`,
+  # `-L/--follow-link`, `--quiet`, `--pause`, `--extract` are all
+  # value-less); their entries are deliberately empty. kubectl cp /
+  # oc cp inherit the entire kubectl global flag set — only the ones
+  # that take a value AND can credibly appear next to a path are
+  # listed here (kubeconfig/cluster paths can be local files but the
+  # plugin does not police reads, so we drop their values without
+  # validation).
+  local short_value_flags="" long_value_flags=""
+  case "$verb_pair" in
+    "kubectl cp"|"oc cp")
+      short_value_flags="-c -n -s"
+      long_value_flags="--container --namespace --kubeconfig --context --cluster --user --token --server --as --as-group --certificate-authority --client-certificate --client-key --cache-dir --request-timeout --tls-server-name --retries"
+      ;;
+  esac
+
   # Walk positional operands. cp-family semantics: the LAST positional
-  # is the destination, every prior one is a source. The plugin protects
-  # writes, not reads, so a local source is left out of the check
-  # (uploading `docker cp /tmp/x container:/y` is read-only on /tmp/x and
-  # must not false-positive). A local DESTINATION is preserved as a `cp`
-  # operand so the existing cp walker validates it (downloads such as
-  # `docker cp container:/x /etc/foo` should still be blocked). Operands
-  # of the universal `<id>:<path>` form are dropped — they target a
-  # foreign filesystem and the boundary doesn't apply.
+  # is the destination; every earlier positional is a source. The
+  # plugin protects writes, not reads — so a local SOURCE is dropped
+  # (uploading `docker cp /tmp/x container:/y` is read-only on /tmp/x
+  # and must not false-positive). A local DESTINATION is preserved
+  # below as the operand of a synthetic `cp <dst>` so the existing
+  # cp walker validates it. This is a deliberate divergence from the
+  # bare `cp` walker (which strict-checks both src and dst) — the
+  # remote-dispatch case has a remote operand on the OTHER side, so
+  # the boundary's "no copies from outside" semantics do not apply
+  # symmetrically here. Operands of the universal `<id>:<path>` form
+  # are dropped because they target a foreign filesystem.
   local -a positionals=()
   while [ $k -lt $n ]; do
     local raw="${_RD_TOKS[$k]}" tok
     tok=$(strip_quotes "$raw")
     case "$tok" in
-      -*) k=$((k + 1)); continue ;;
+      --)
+        # POSIX end-of-options: every later token is a positional,
+        # even if it begins with `-`. Used by kubectl exec but also
+        # valid for cp invocations.
+        k=$((k + 1))
+        while [ $k -lt $n ]; do
+          positionals+=("${_RD_TOKS[$k]}")
+          k=$((k + 1))
+        done
+        continue ;;
+      --*=*)
+        k=$((k + 1)); continue ;;
+      -*)
+        if _rd_flag_takes_value "$tok" "$short_value_flags" "$long_value_flags"; then
+          k=$((k + 2))
+        else
+          k=$((k + 1))
+        fi
+        continue ;;
     esac
     positionals+=("$raw")
     k=$((k + 1))
@@ -209,7 +272,7 @@ _rd_rewrite_remote_copy() {
 
   local last_idx=$(( ${#positionals[@]} - 1 ))
   if [ $last_idx -lt 0 ]; then
-    printf '%s %s' "${_RD_TOKS[$v_idx]}" "${_RD_TOKS[$((v_idx + 1))]}"
+    printf '%s' "$verb_pair"
     return
   fi
   local last_raw="${positionals[$last_idx]}"
