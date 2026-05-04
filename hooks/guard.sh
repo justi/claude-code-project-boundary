@@ -884,6 +884,18 @@ check_single_command() {
     CMD_TOKENS_SCAN+=("$tok")
   done < <(tokenize_args "$CMD_BLANKED")
 
+  # --- Validate argument-as-command flag values recursively ---
+  # Tools like `tar --to-command=<cmd>` / `rsync -e <cmd>` /
+  # `git -c <exec-key>=<cmd>` execute the flag value as a local shell
+  # command. The walkers below only see flag NAMES — not VALUES — so a
+  # destructive payload would slip past them. Extract every recognised
+  # payload from this (post-split) subcommand and dispatch it through
+  # check_single_command recursively, reusing the entire detector
+  # pipeline. Generic for the whole class — see hooks/lib/subcmd_flags.sh.
+  while IFS= read -r _sf_payload; do
+    [ -n "$_sf_payload" ] && check_single_command "$_sf_payload"
+  done < <(extract_subcmd_flag_payloads "$CMD")
+
   # xargs, find-delete, rm, mv, cp, ln moved to hooks/lib/detectors/destructive.sh.
   run_destructive_detectors
 

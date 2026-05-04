@@ -249,3 +249,56 @@ expect_allowed "git -c pager.log='less -R' log (benign pager)" \
   "git -c pager.log='less -R' log"
 
 echo ""
+
+# ============================================================
+# 33. Chained sub-commands must each be expanded (not just the first)
+# ------------------------------------------------------------
+# expand_subcmd_flags was applied to the FULL command string before
+# split_and_check splits on `;` / `&&` / `||` / `|` / newline, but
+# the function only inspected the FIRST verb. A chained command
+# whose later subcommand carries the exec-sink flag was therefore
+# never expanded — every walker downstream saw only the original
+# (un-routed) value, and the destructive payload slipped through.
+#
+# Example:
+#   echo ok ; tar -xf foo --to-command='rm /etc/x'
+# Pre-fix: expand_subcmd_flags inspects `echo`, finds no sink, the
+# full string is split into [echo ok, tar ... --to-command=...]
+# and check_single_command runs on each subcommand. The tar
+# subcommand still has the unrouted --to-command= value — same
+# state as before any patch.
+#
+# Fix: route the expansion per-subcommand, after splitting. The
+# refactor lifts payload extraction into check_single_command and
+# recursively dispatches each payload through the same function.
+# Heredoc-related edge cases collapse with the same change because
+# the new path never mutates the chained command string.
+#
+# Reported by Copilot review on PR #23 (options.sh:92).
+# ============================================================
+echo "--- 33. chained sub-commands per-subcmd expansion ---"
+
+expect_blocked "echo ok ; tar -xf … --to-command='rm /etc/x' (chained ;)" \
+  "echo ok ; tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+expect_blocked "git status && tar --to-command='rm /etc/x' (chained &&)" \
+  "git status && tar --to-command='rm /etc/passwd_test' -xf $PROJECT/archive.tar"
+
+expect_blocked "false || rsync --rsh='rm /etc/x' (chained ||)" \
+  "false || rsync --rsh='rm /etc/passwd_test' $PROJECT/CHANGELOG.md host:/dst"
+
+expect_blocked "true | git -c core.sshCommand='rm /etc/x' clone (pipe)" \
+  "true | git -c core.sshCommand='rm /etc/passwd_test' clone foo"
+
+expect_blocked "tar … --to-command='rm /etc/x' AS LATER subcmd in newline-chain" \
+  "echo first
+tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+# Positive: chained legitimate commands must remain ALLOWED.
+expect_allowed "echo ok ; tar -xf in-project (no destructive payload)" \
+  "echo ok ; tar -xf $PROJECT/archive.tar -C $PROJECT/extracted"
+
+expect_allowed "git status && rsync -e ssh src host:dst (benign chain)" \
+  "git status && rsync -e ssh $PROJECT/CHANGELOG.md host:/dst"
+
+echo ""

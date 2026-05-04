@@ -81,15 +81,6 @@ split_and_check() {
   local full_cmd="$1"
   export _GUARD_CD_OUTSIDE=0
   export _GUARD_CD_IN_ALLOWLIST=0
-
-  # --- Re-emit argument-as-command flag values as sibling statements ---
-  # Tools like `tar --to-command=<cmd>` execute their flag value as a
-  # local shell command, but the path / destructive walkers downstream
-  # only see flag NAMES — not VALUES. expand_subcmd_flags appends each
-  # such value after a `;` so the splitter below picks it up as an
-  # ordinary sub-command and routes it through check_single_command.
-  # Generic for the whole class — see hooks/lib/subcmd_flags.sh.
-  full_cmd=$(expand_subcmd_flags "$full_cmd")
   local -a subcmds=()
   local current=""
   local in_single_quote=0

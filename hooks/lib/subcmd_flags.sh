@@ -20,27 +20,25 @@
 #       gpg.program / gpg.ssh.program / credential.helper /
 #       diff.external / mergetool.<tool>.cmd
 #
-# The rewrite is intentionally simple: pull each sub-command value out
-# of the original command string and re-emit it as a sibling statement
-# joined by `;`. The downstream split_and_check splitter picks the new
-# statement up automatically and dispatches it through the normal
-# check_single_command pipeline — so every existing destructive /
-# write-target walker validates the payload without any per-tool
-# duplication of detection logic.
+# The mechanism is intentionally simple: extract each sub-command
+# value from a single (post-split) command and emit one payload per
+# line on stdout. The caller — check_single_command in guard.sh —
+# recursively dispatches each payload through itself, so every
+# existing destructive / write-target walker validates the payload
+# without any per-tool duplication of detection logic.
 #
-#   tar -xf foo.tar --to-command='rm /etc/x'
-#     → tar -xf foo.tar --to-command='rm /etc/x' ; rm /etc/x
+#   tar -xf foo.tar --to-command='<destructive-payload>'
+#     → check_single_command "<destructive-payload>"
 #
-# The original verb invocation is preserved verbatim. The walkers
-# already ignore the literal `rm /etc/x` bytes inside the quoted
-# `--to-command=` value (they only match command names at token-start
-# positions, not inside a single arg token), so the original side of
-# the rewrite produces no extra detector hits — only the appended
-# sibling statement is validated as a real command.
+# Must run PER SUBCOMMAND (i.e. inside check_single_command, AFTER
+# split_and_check has split the chained command line on `;` / `&&`
+# / `||` / `|` / newline). Routing the extraction earlier — before
+# the splitter — would only catch the FIRST verb of a chained
+# command, leaving any sink in a later subcommand undetected
+# (Copilot review on PR #23, options.sh:92).
 #
-# Pure (no caller-scope dependencies); returns the rewritten command
-# string on stdout. Depends on hooks/lib/tokenize.sh (tokenize_args,
-# strip_quotes).
+# Pure (no caller-scope dependencies). Depends on
+# hooks/lib/tokenize.sh (tokenize_args, strip_quotes).
 
 # --- Sink table ---
 # Format: "<verb>|<short_flag>|<long_flag_no_eq>|<kind>|<key_regex>"
@@ -102,12 +100,13 @@ _sf_strip_path_prefix() {
   esac
 }
 
-# --- Main entry: append sub-command values as sibling statements ---
-# In:  full CMD string
-# Out: CMD string with each recognised flag-value re-emitted after a
-#      `;` separator; unchanged when no sink row matches the verb or
-#      when no recognised flag carries a value.
-expand_subcmd_flags() {
+# --- Main entry: extract sub-command flag values from one subcommand ---
+# In:  single (post-split) command string
+# Out: zero or more payload strings on stdout, one per line. Empty
+#      output when no sink row matches the verb or no recognised flag
+#      carries a value. Caller dispatches each payload through
+#      check_single_command recursively.
+extract_subcmd_flag_payloads() {
   local cmd="$1"
   _SF_TOKS=()
   local t
@@ -118,7 +117,7 @@ expand_subcmd_flags() {
 
   local verb_idx
   verb_idx=$(_sf_find_verb_idx)
-  [ "$verb_idx" -lt 0 ] && { printf '%s' "$cmd"; return; }
+  [ "$verb_idx" -lt 0 ] && return
 
   local verb
   verb=$(strip_quotes "${_SF_TOKS[$verb_idx]}")
@@ -140,11 +139,10 @@ expand_subcmd_flags() {
       break
     fi
   done
-  [ $matched -eq 0 ] && { printf '%s' "$cmd"; return; }
+  [ $matched -eq 0 ] && return
 
-  # Walk tokens after the verb, collect every flag-value that the
-  # sink row recognises.
-  local -a payloads=()
+  # Walk tokens after the verb, emit every flag-value that the sink
+  # row recognises (one payload per line on stdout).
   local i=$((verb_idx + 1)) n=${#_SF_TOKS[@]}
   while [ $i -lt $n ]; do
     local raw="${_SF_TOKS[$i]}" tok val="" hit=0
@@ -169,7 +167,9 @@ expand_subcmd_flags() {
     fi
 
     [ $hit -eq 0 ] && continue
-    [ -z "$val" ] && continue
+    # Skip empty / whitespace-only values; they cannot be exec sinks
+    # (Codex review on PR #23, Q4).
+    [[ -z "${val//[[:space:]]/}" ]] && continue
 
     if [ "$sink_kind" = "git-config" ]; then
       # Value shape is `key=subcmd`. Without an `=` it is not a config
@@ -178,24 +178,10 @@ expand_subcmd_flags() {
       local key="${val%%=*}"
       local subcmd_val="${val#*=}"
       if [[ "$key" =~ $sink_key_regex ]]; then
-        payloads+=("$subcmd_val")
+        printf '%s\n' "$subcmd_val"
       fi
     else
-      payloads+=("$val")
+      printf '%s\n' "$val"
     fi
-  done
-
-  if [ ${#payloads[@]} -eq 0 ]; then
-    printf '%s' "$cmd"
-    return
-  fi
-
-  # Append each payload as a sibling statement. split_and_check splits
-  # on `;` and dispatches each sub-command separately, so the existing
-  # detectors validate the payloads without any per-tool plumbing.
-  printf '%s' "$cmd"
-  local p
-  for p in "${payloads[@]}"; do
-    printf ' ; %s' "$p"
   done
 }
