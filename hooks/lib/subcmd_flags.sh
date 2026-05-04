@@ -19,6 +19,10 @@
 #       core.editor / core.pager / pager.<cmd> / sequence.editor /
 #       gpg.program / gpg.ssh.program / credential.helper /
 #       diff.external / mergetool.<tool>.cmd
+#   git -c <additional-exec-keys>         [section 35]
+#       core.askPass / core.fsmonitor / uploadpack.packObjectsHook /
+#       filter.<n>.clean / filter.<n>.smudge / filter.<n>.process /
+#       diff.<n>.command / diff.<n>.textconv / merge.<n>.driver
 #
 # The mechanism is intentionally simple: extract each sub-command
 # value from a single (post-split) command and emit one payload per
@@ -56,7 +60,7 @@
 declare -a SUBCMD_FLAG_SINKS=(
   "tar||--to-command|value|"
   "rsync|-e|--rsh|value|"
-  "git|-c||git-config|^(core\\.(sshCommand|editor|pager)|pager\\..+|sequence\\.editor|gpg\\.(program|ssh\\.program)|credential\\.helper|diff\\.external|mergetool\\..+\\.cmd)$"
+  "git|-c||git-config|^(core\\.(sshCommand|editor|pager|askPass|fsmonitor)|pager\\..+|sequence\\.editor|gpg\\.(program|ssh\\.program)|credential\\.helper|diff\\.(external|.+\\.(command|textconv))|mergetool\\..+\\.cmd|merge\\..+\\.driver|filter\\..+\\.(clean|smudge|process)|uploadpack\\.packObjectsHook)$"
 )
 
 # --- Find verb token index, skipping wrappers / VAR=val / flags ---

@@ -344,3 +344,67 @@ expect_allowed "rsync -avzh src dst (cluster ends in -h, not exec sink)" \
   "rsync -avzh $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
 
 echo ""
+
+# ============================================================
+# 35. Additional git-config exec-sink keys
+# ------------------------------------------------------------
+# Section 32 covered the most common exec-sink config keys but
+# missed several that also substitute the value as a program git
+# invokes:
+#
+#   core.askPass               password / passphrase prompt helper
+#   core.fsmonitor             file-system monitor command
+#   uploadpack.packObjectsHook hook run when packing for transfer
+#   filter.<name>.clean        content filter (working tree -> index)
+#   filter.<name>.smudge       content filter (index -> working tree)
+#   filter.<name>.process      long-running filter process
+#   diff.<name>.command        custom diff driver
+#   diff.<name>.textconv       text-conversion command for diff
+#   merge.<name>.driver        custom merge driver
+#
+# Reported by Codex review on PR #23 (Q6).
+# ============================================================
+echo "--- 35. additional git-config exec-sink keys ---"
+
+expect_blocked "git -c core.askPass='rm /etc/x' fetch" \
+  "git -c core.askPass='rm /etc/passwd_test' fetch"
+
+expect_blocked "git -c core.fsmonitor='rm /etc/x' status" \
+  "git -c core.fsmonitor='rm /etc/passwd_test' status"
+
+expect_blocked "git -c uploadpack.packObjectsHook='rm /etc/x' fetch" \
+  "git -c uploadpack.packObjectsHook='rm /etc/passwd_test' fetch"
+
+expect_blocked "git -c filter.lfs.clean='rm /etc/x' add" \
+  "git -c filter.lfs.clean='rm /etc/passwd_test' add file.txt"
+
+expect_blocked "git -c filter.lfs.smudge='rm /etc/x' checkout" \
+  "git -c filter.lfs.smudge='rm /etc/passwd_test' checkout file.txt"
+
+expect_blocked "git -c filter.lfs.process='rm /etc/x' add" \
+  "git -c filter.lfs.process='rm /etc/passwd_test' add file.txt"
+
+expect_blocked "git -c diff.foo.command='rm /etc/x' diff" \
+  "git -c diff.foo.command='rm /etc/passwd_test' diff"
+
+expect_blocked "git -c diff.foo.textconv='rm /etc/x' diff" \
+  "git -c diff.foo.textconv='rm /etc/passwd_test' diff"
+
+expect_blocked "git -c merge.foo.driver='rm /etc/x' merge" \
+  "git -c merge.foo.driver='rm /etc/passwd_test' merge"
+
+# Positive cases — these config keys are NOT exec sinks and must
+# remain ALLOWED:
+expect_allowed "git -c filter.lfs.required=true add (boolean filter config)" \
+  "git -c filter.lfs.required=true add file.txt"
+
+expect_allowed "git -c merge.foo.name='My driver' merge (friendly name string)" \
+  "git -c merge.foo.name='My driver' merge"
+
+expect_allowed "git -c diff.foo.cachetextconv=true diff (boolean)" \
+  "git -c diff.foo.cachetextconv=true diff"
+
+expect_allowed "git -c protocol.allow=user fetch" \
+  "git -c protocol.allow=user fetch"
+
+echo ""
