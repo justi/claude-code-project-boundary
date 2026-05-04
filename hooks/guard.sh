@@ -39,6 +39,8 @@ source "$_GUARD_DIR/lib/detectors/write_targets.sh"
 source "$_GUARD_DIR/lib/options.sh"
 # shellcheck source=lib/remote_dispatch.sh
 source "$_GUARD_DIR/lib/remote_dispatch.sh"
+# shellcheck source=lib/subcmd_flags.sh
+source "$_GUARD_DIR/lib/subcmd_flags.sh"
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
@@ -217,6 +219,15 @@ check_single_command() {
   if [ -z "$CMD" ]; then
     return 0
   fi
+
+  # Snapshot the command BEFORE sudo-strip and any other normalization,
+  # so extract_subcmd_flag_payloads can see the wrapper and its option-
+  # with-value flags (e.g. `sudo -u root tar --to-command='<payload>'`).
+  # The literal sudo-strip below removes only the bare `sudo ` token,
+  # leaving `-u root` behind — which would mis-identify the verb in
+  # the subcmd-flag scan. Reported by Copilot review on PR #23
+  # (guard.sh:897).
+  local _CMD_PRE_STRIP="$CMD"
 
   # --- Strip sudo prefix ---
   if [[ "$CMD" =~ ^sudo[[:space:]]+ ]]; then
@@ -881,6 +892,19 @@ check_single_command() {
     [[ -z "$tok" ]] && continue
     CMD_TOKENS_SCAN+=("$tok")
   done < <(tokenize_args "$CMD_BLANKED")
+
+  # --- Validate argument-as-command flag values recursively ---
+  # Tools like `tar --to-command=<cmd>` / `rsync -e <cmd>` /
+  # `git -c <exec-key>=<cmd>` execute the flag value as a local shell
+  # command. The walkers below only see flag NAMES — not VALUES — so a
+  # destructive payload would slip past them. Extract every recognised
+  # payload from this (post-split) subcommand and dispatch it through
+  # check_single_command recursively, reusing the entire detector
+  # pipeline. Generic for the whole class — see hooks/lib/subcmd_flags.sh.
+  local _sf_payload
+  while IFS= read -r _sf_payload; do
+    [ -n "$_sf_payload" ] && check_single_command "$_sf_payload"
+  done < <(extract_subcmd_flag_payloads "$_CMD_PRE_STRIP")
 
   # xargs, find-delete, rm, mv, cp, ln moved to hooks/lib/detectors/destructive.sh.
   run_destructive_detectors

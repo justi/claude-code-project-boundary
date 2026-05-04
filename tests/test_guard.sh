@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/test_file_guard.sh"
 source "$SCRIPT_DIR/test_true_negatives.sh"
 source "$SCRIPT_DIR/test_bypass_reproducers_core.sh"
 source "$SCRIPT_DIR/test_bypass_reproducers_recent.sh"
+source "$SCRIPT_DIR/test_bypass_reproducers_flags.sh"
 source "$SCRIPT_DIR/test_allowlist.sh"
 source "$SCRIPT_DIR/test_session_hint.sh"
 
