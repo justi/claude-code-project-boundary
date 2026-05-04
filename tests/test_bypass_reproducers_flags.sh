@@ -786,3 +786,89 @@ expect_allowed "nice -n 10 ssh host 'rm /etc/x' (remote dispatch)" \
   "nice -n 10 ssh host 'rm /etc/passwd_test'"
 
 echo ""
+
+# ============================================================
+# 43. Valueless sudo flags mis-classified as value-bearing
+# ------------------------------------------------------------
+# The sudo opt tables in sections 40 / 41 / 42 listed `-A` (askpass),
+# `-K` (kill-cache), `-k` (invalidate-timestamp), and `--preserve-env`
+# in the value-bearing branch — i.e. the wrapper-walk and the new
+# strip_sudo_wrapper_with_opts both consumed the next token as the
+# flag's value. But these sudo flags are VALUE-LESS (they do not take
+# an argument); skipping the next token strips the actual verb.
+#
+# Concrete bypasses Codex round-1 on PR #24 surfaced:
+#
+#   sudo -A install -m 755 src /etc/owned       (askpass valueless)
+#   sudo -k install -m 755 src /etc/owned       (invalidate-ts valueless)
+#   sudo -K install -m 755 src /etc/owned       (kill-cache valueless)
+#   sudo --preserve-env install ... /etc/owned  (long valueless)
+#   sudo -A /bin/rm /etc/passwd                 (same on /bin/rm path)
+#
+# Fix: split the sudo opt tables into a value-bearing list (`-C -D -g
+# -h -p -r -t -T -U -u`, and the long forms `--close-from --chdir
+# --group --host --prompt --role --type --command-timeout
+# --other-user --user --auth-type`) and let everything else fall
+# through to the generic value-less `-*` branch (i += 1). Applied
+# symmetrically across hooks/lib/command_name.sh,
+# hooks/lib/subcmd_flags.sh, hooks/lib/remote_dispatch.sh and
+# strip_sudo_wrapper_with_opts.
+#
+# Reported by Codex review round-1 on PR #24 (P1; same root cause as
+# `-A` / `-K` / `-k` / `--preserve-env` being mis-listed in the
+# section 40 fix from PR #23, propagated forward into sections 41 / 42).
+# ============================================================
+echo "--- 43. valueless sudo flags mis-classified as value-bearing ---"
+
+# command_name_is install bypass with valueless sudo flags.
+expect_blocked "sudo -A install -m 755 ... /etc/owned" \
+  "sudo -A install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "sudo -k install -m 755 ... /etc/owned" \
+  "sudo -k install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "sudo -K install -m 755 ... /etc/owned" \
+  "sudo -K install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "sudo --preserve-env install -m 755 ... /etc/owned" \
+  "sudo --preserve-env install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+# strip_command_name_prefix bypass with the same flags.
+expect_blocked "sudo -A /bin/rm /etc/passwd_test" \
+  "sudo -A /bin/rm /etc/passwd_test"
+
+expect_blocked "sudo --preserve-env /bin/rm /etc/passwd_test" \
+  "sudo --preserve-env /bin/rm /etc/passwd_test"
+
+# Subcmd-flag sink bypass (section 40 territory) with valueless sudo flag.
+expect_blocked "sudo -A tar --to-command='rm /etc/x'" \
+  "sudo -A tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+expect_blocked "sudo --preserve-env tar --to-command='rm /etc/x'" \
+  "sudo --preserve-env tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+# Nested wrapper combination Codex flagged as untested.
+expect_blocked "sudo nice -n 10 install -m 755 ... /etc/owned" \
+  "sudo nice -n 10 install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+# True-negatives: legit sudo with valueless flags must remain ALLOWED.
+expect_allowed "sudo -A cat (askpass + read in-project)" \
+  "sudo -A cat $PROJECT/CHANGELOG.md"
+
+expect_allowed "sudo -k ls (invalidate-ts + benign)" \
+  "sudo -k ls $PROJECT"
+
+expect_allowed "sudo --preserve-env cat (long valueless + read)" \
+  "sudo --preserve-env cat $PROJECT/CHANGELOG.md"
+
+expect_allowed "sudo -E cat (preserve-env short, valueless)" \
+  "sudo -E cat $PROJECT/CHANGELOG.md"
+
+# Regression-pin: value-bearing forms must still consume their value.
+expect_blocked "sudo -p 'pwd:' install ... /etc/owned (-p prompt takes value)" \
+  "sudo -p 'pwd:' install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "sudo -C 100 install ... /etc/owned (-C close-from takes value)" \
+  "sudo -C 100 install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+echo ""

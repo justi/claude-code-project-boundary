@@ -20,8 +20,19 @@
 # comment in _sf_find_verb_idx for the bypass shape and section 41
 # of tests/test_bypass_reproducers_flags.sh for the reproducers.
 _cn_wrapper_opts_with_val() {
+  # Only flags that actually take a value go in this list; value-less
+  # flags (`-A`, `-k`, `-K`, `-E`, `-H`, `-i`, `-l`, `-n`, `-P`, `-S`,
+  # `-s`, `-V`, `-v`, `-b`, `-e`; `--askpass`, `--background`,
+  # `--preserve-env`, `--edit`, `--set-home`, `--login`,
+  # `--remove-timestamp`, `--reset-timestamp`, `--list`,
+  # `--non-interactive`, `--preserve-groups`, `--stdin`, `--shell`,
+  # `--version`, `--validate`) fall through to the generic `-*`
+  # branch (consume one token). Mis-listing a value-less flag here
+  # would skip the verb (`sudo -A install ...` -> `install` consumed
+  # as the value of `-A`), reopening the original bypass — Codex
+  # round-1 P1 on PR #24.
   case "$1" in
-    sudo) printf -- '-u -g -p -h -D -C -A -K -k -r -t' ;;
+    sudo) printf -- '-C -D -g -h -p -r -t -T -U -u --close-from --chdir --group --host --prompt --role --type --command-timeout --other-user --user --auth-type' ;;
     env)  printf -- '-u -C -P --unset --chdir' ;;
     timeout) printf -- '-k -s --kill-after --signal' ;;
     nice) printf -- '-n --adjustment' ;;
@@ -262,15 +273,20 @@ strip_sudo_wrapper_with_opts() {
   done < <(tokenize_args "$cmd")
 
   # toks[0] is "sudo" (or absent if cmd was bare "sudo"). Walk past
-  # sudo's option-with-value pairs and value-less flags.
+  # sudo's option-with-value pairs and value-less flags. The value-
+  # bearing list MUST exactly match sudo's "takes-an-argument" set;
+  # mis-classifying a value-less flag (`-A`, `-K`, `-k`,
+  # `--preserve-env`, `--login`, `--shell`, etc.) consumes the real
+  # verb as the flag's value and reopens the bypass this PR closes.
+  # Codex round-1 P1 on PR #24.
   local i=1 n=${#toks[@]}
   while [ $i -lt $n ]; do
     local raw="${toks[$i]}" t
     t=$(strip_quotes "$raw")
     case "$t" in
-      -u|-g|-p|-h|-D|-C|-A|-K|-k|-r|-t)
+      -C|-D|-g|-h|-p|-r|-t|-T|-U|-u)
         i=$((i + 2)); continue ;;
-      --user|--group|--prompt|--host|--chdir|--auth-type|--close-from|--login|--other-user|--preserve-env|--shell|--type)
+      --close-from|--chdir|--group|--host|--prompt|--role|--type|--command-timeout|--other-user|--user|--auth-type)
         i=$((i + 2)); continue ;;
       --*=*)
         i=$((i + 1)); continue ;;
