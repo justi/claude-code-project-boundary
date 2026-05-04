@@ -75,8 +75,13 @@ declare -a SUBCMD_FLAG_SINKS=(
 # (guard.sh:897). Returns a space-separated list on stdout; empty
 # for unknown wrappers.
 _sf_wrapper_opts_with_val() {
+  # Only flags that actually take a value go in this list — see the
+  # comment on _cn_wrapper_opts_with_val (command_name.sh) for the
+  # full classification rationale. Mis-listing a value-less sudo flag
+  # (`-A`, `-K`, `-k`, `--preserve-env`, ...) skips the real verb,
+  # reopening the section-40 bypass. Codex round-1 P1 on PR #24.
   case "$1" in
-    sudo) printf -- '-u -g -p -h -D -C -A -K -k -r -t' ;;
+    sudo) printf -- '-C -D -g -h -p -r -t -T -U -u --close-from --chdir --group --host --prompt --role --type --command-timeout --other-user --user --auth-type' ;;
     env)  printf -- '-u -C -P --unset --chdir' ;;
     timeout) printf -- '-k -s --kill-after --signal' ;;
     nice) printf -- '-n --adjustment' ;;

@@ -88,8 +88,14 @@ _rd_is_remote_target_operand() {
 # tests/test_bypass_reproducers_flags.sh for the over-block
 # scenarios this guards against.
 _rd_wrapper_opts_with_val() {
+  # Only flags that actually take a value go in this list — see the
+  # comment on _cn_wrapper_opts_with_val (command_name.sh) for the
+  # full classification rationale. Mis-listing a value-less sudo flag
+  # would mis-identify the verb under remote-dispatch wrappers (e.g.
+  # `sudo -A docker exec ...`), letting the local-fs walkers
+  # over-block legit foreign-fs commands. Codex round-1 P1 on PR #24.
   case "$1" in
-    sudo) printf -- '-u -g -p -h -D -C -A -K -k -r -t' ;;
+    sudo) printf -- '-C -D -g -h -p -r -t -T -U -u --close-from --chdir --group --host --prompt --role --type --command-timeout --other-user --user --auth-type' ;;
     env)  printf -- '-u -C -P --unset --chdir' ;;
     timeout) printf -- '-k -s --kill-after --signal' ;;
     nice) printf -- '-n --adjustment' ;;
