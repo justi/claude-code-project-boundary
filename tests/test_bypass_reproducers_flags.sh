@@ -451,3 +451,35 @@ expect_allowed "git -c submodule.foo.update=none submodule update" \
   "git -c submodule.foo.update=none submodule update"
 
 echo ""
+
+# ============================================================
+# 37. git-config keys are case-insensitive
+# ------------------------------------------------------------
+# git treats configuration keys as case-insensitive (`Core.SshCommand`
+# == `core.sshCommand`), but the exec-sink regex match was case-
+# sensitive (`[[ "$key" =~ $regex ]]` without nocasematch). A bypass
+# like `git -c Core.SshCommand='rm /etc/x' clone foo` therefore
+# slipped past the regex.
+#
+# Fix: enable nocasematch around the regex test (save/restore the
+# previous shopt state so callers are unaffected).
+#
+# Reported by Copilot review on PR #23 (subcmd_flags.sh:203).
+# ============================================================
+echo "--- 37. git-config case-insensitive keys ---"
+
+expect_blocked "git -c Core.SshCommand='rm /etc/x' (CamelCase key)" \
+  "git -c Core.SshCommand='rm /etc/passwd_test' clone foo"
+
+expect_blocked "git -c CORE.SSHCOMMAND='rm /etc/x' (uppercase key)" \
+  "git -c CORE.SSHCOMMAND='rm /etc/passwd_test' clone foo"
+
+expect_blocked "git -c GPG.Program='rm /etc/x' (mixed case)" \
+  "git -c GPG.Program='rm /etc/passwd_test' commit -S"
+
+# True-negative: still differentiate exec keys from data keys
+# (case-insensitively).
+expect_allowed "git -c USER.Name='Foo Bar' status (case-insensitive non-sink)" \
+  "git -c USER.Name='Foo Bar' status"
+
+echo ""

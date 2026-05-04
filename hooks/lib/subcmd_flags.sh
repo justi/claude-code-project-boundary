@@ -200,7 +200,18 @@ extract_subcmd_flag_payloads() {
       # `key='!cmd ...'` with the quotes intact). Strip them here so
       # the bang-prefix check below sees the real first character.
       subcmd_val=$(strip_quotes "$subcmd_val")
-      if [[ "$key" =~ $sink_key_regex ]]; then
+      # git config keys are case-insensitive (`Core.SshCommand` ==
+      # `core.sshCommand`); enable nocasematch around the regex test
+      # so case-folded variants are not a bypass route. Save / restore
+      # the previous state to avoid leaking the option to callers.
+      # Reported by Copilot review on PR #23 (subcmd_flags.sh:203).
+      local _sf_nocase_was_on=0
+      shopt -q nocasematch && _sf_nocase_was_on=1
+      shopt -s nocasematch
+      local _sf_key_match=0
+      [[ "$key" =~ $sink_key_regex ]] && _sf_key_match=1
+      [ $_sf_nocase_was_on -eq 1 ] || shopt -u nocasematch
+      if [ $_sf_key_match -eq 1 ]; then
         # `submodule.<n>.update` is only an exec sink when the value
         # starts with `!` — every other value is a reserved word
         # (rebase / merge / checkout / none). Strip the bang before
