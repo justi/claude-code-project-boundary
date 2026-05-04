@@ -10,6 +10,98 @@
 # command_name_is reads a CMD variable from its caller's dynamic
 # scope; other functions are pure.
 
+# --- Per-wrapper list of options that consume the NEXT token ---
+# Mirrors _sf_wrapper_opts_with_val in subcmd_flags.sh and
+# _rd_wrapper_opts_with_val in remote_dispatch.sh. The three lists
+# are kept in sync but live in separate modules because each module
+# walks its own token array (`local toks` here, module-level
+# `_SF_TOKS` / `_RD_TOKS` elsewhere) — sharing one helper would need
+# bash 4 nameref support which macOS bash 3.2 lacks. See the
+# comment in _sf_find_verb_idx for the bypass shape and section 41
+# of tests/test_bypass_reproducers_flags.sh for the reproducers.
+_cn_wrapper_opts_with_val() {
+  case "$1" in
+    sudo) printf -- '-u -g -p -h -D -C -A -K -k -r -t' ;;
+    env)  printf -- '-u -C -P --unset --chdir' ;;
+    timeout) printf -- '-k -s --kill-after --signal' ;;
+    nice) printf -- '-n --adjustment' ;;
+    ionice) printf -- '-c -n -p --class --classdata --pid' ;;
+    chrt) printf -- '-p --pid' ;;
+    *) ;;
+  esac
+}
+
+# --- Strip /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/ prefix ---
+_cn_strip_path_prefix() {
+  local n="$1"
+  case "$n" in
+    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) printf '%s' "${n##*/}" ;;
+    *) printf '%s' "$n" ;;
+  esac
+}
+
+# --- Find verb-token index in a tokens array, skipping wrappers / opts / VAR=val ---
+# Caller fills the local-scope `toks` array before calling. Returns the
+# 0-based index of the first non-wrapper / non-flag / non-VAR=val token,
+# or -1 if no such token exists. Skip rules:
+#
+#   - Recognised wrappers (sudo / env / nice / nohup / time / stdbuf /
+#     ionice / chrt / taskset / command / builtin / exec / timeout /
+#     /bin/env / /usr/bin/env) advance one position; the next iteration
+#     also skips a per-wrapper option-with-value pair (e.g. `-u USER`
+#     for sudo / env, `-k DUR` for timeout) when the value would
+#     otherwise be mis-identified as the verb.
+#   - `timeout` additionally takes a duration operand (`5`, `5s`,
+#     `1.5h`, `infinity`) which is consumed as a single positional.
+#   - `[A-Za-z_]*=*` (env-var prefix) and bare `-*` flags are skipped
+#     one at a time.
+#
+# Reads the caller's `toks` array via dynamic scoping (bash `local`
+# semantics); CALLERS MUST declare `local -a toks=()` before invoking.
+_cn_find_verb_idx() {
+  local i=0 n=${#toks[@]}
+  local prev_was_timeout=0 last_wrapper=""
+  while [ $i -lt $n ]; do
+    local raw="${toks[$i]}" t
+    t=$(strip_quotes "$raw")
+
+    # Wrapper opt-with-value: if the previous wrapper had options
+    # that consume the next token, advance past both the flag and
+    # its value. Without this, `sudo -u root install …` mis-
+    # identifies `root` as the verb (Codex round-4 follow-up on
+    # PR #23; same root cause as section 40's _sf_find_verb_idx fix).
+    if [ -n "$last_wrapper" ]; then
+      local opts; opts=$(_cn_wrapper_opts_with_val "$last_wrapper")
+      if [ -n "$opts" ]; then
+        case " $opts " in
+          *" $t "*) i=$((i + 2)); continue ;;
+        esac
+      fi
+    fi
+
+    if [ $prev_was_timeout -eq 1 ]; then
+      prev_was_timeout=0
+      case "$t" in
+        [0-9]*|inf*) i=$((i + 1)); continue ;;
+      esac
+    fi
+    case "$t" in
+      timeout)
+        prev_was_timeout=1; last_wrapper="timeout"; i=$((i + 1)); continue ;;
+      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
+        last_wrapper=$(_cn_strip_path_prefix "$t")
+        i=$((i + 1)); continue ;;
+    esac
+    case "$t" in
+      [A-Za-z_]*=*) i=$((i + 1)); continue ;;
+      -*) i=$((i + 1)); continue ;;
+    esac
+    printf '%d' "$i"
+    return
+  done
+  printf -- '-1'
+}
+
 # --- Strip a binary path prefix from the command-name token ---
 # Strip a binary path prefix (/bin/, /sbin/, /usr/bin/, /usr/sbin/,
 # /usr/local/bin/) from the command-name token of CMD only — not from
@@ -32,35 +124,9 @@ strip_command_name_prefix() {
     toks+=("$t")
   done < <(tokenize_args "$cmd")
 
-  local idx=-1 i
-  local prev_was_timeout=0
-  for i in "${!toks[@]}"; do
-    local raw="${toks[$i]}"
-    local t
-    t=$(strip_quotes "$raw")
-    # `timeout` takes a duration operand (e.g. `timeout 5 cmd`,
-    # `timeout 1.5s cmd`); skip one extra token after it.
-    if [ $prev_was_timeout -eq 1 ]; then
-      prev_was_timeout=0
-      case "$t" in
-        [0-9]*) continue ;;
-      esac
-    fi
-    case "$t" in
-      timeout)
-        prev_was_timeout=1; continue ;;
-      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
-        continue ;;
-    esac
-    case "$t" in
-      [A-Za-z_]*=*) continue ;;
-      -*) continue ;;
-    esac
-    idx=$i
-    break
-  done
-
-  [[ $idx -lt 0 ]] && { printf '%s' "$cmd"; return; }
+  local idx
+  idx=$(_cn_find_verb_idx)
+  [ "$idx" -lt 0 ] && { printf '%s' "$cmd"; return; }
 
   local first
   first=$(strip_quotes "${toks[$idx]}")
@@ -100,32 +166,9 @@ strip_command_name_quotes() {
     toks+=("$t")
   done < <(tokenize_args "$cmd")
 
-  local idx=-1 i prev_was_timeout=0
-  for i in "${!toks[@]}"; do
-    local raw="${toks[$i]}"
-    local t
-    t=$(strip_quotes "$raw")
-    if [ $prev_was_timeout -eq 1 ]; then
-      prev_was_timeout=0
-      case "$t" in
-        [0-9]*) continue ;;
-      esac
-    fi
-    case "$t" in
-      timeout)
-        prev_was_timeout=1; continue ;;
-      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
-        continue ;;
-    esac
-    case "$t" in
-      [A-Za-z_]*=*) continue ;;
-      -*) continue ;;
-    esac
-    idx=$i
-    break
-  done
-
-  [[ $idx -lt 0 ]] && { printf '%s' "$cmd"; return; }
+  local idx
+  idx=$(_cn_find_verb_idx)
+  [ "$idx" -lt 0 ] && { printf '%s' "$cmd"; return; }
 
   local raw="${toks[$idx]}"
   # Only rewrite when the raw token is itself surrounded by matching
@@ -154,7 +197,8 @@ command_name_is() {
   # Return 0 iff the post-wrapper command-name token of $CMD equals $1.
   # Walks $CMD tokens using the same rules as strip_command_name_prefix:
   # skip `timeout <dur>`, sudo/env/nice/nohup/time/stdbuf/ionice/chrt/
-  # taskset/command/builtin/exec wrappers, VAR=val environment prefixes
+  # taskset/command/builtin/exec wrappers (and their option-with-value
+  # pairs like `-u USER`, `-k DUR`), VAR=val environment prefixes
   # and -flag tokens. Any /bin/, /sbin/, /usr/bin/, /usr/sbin/,
   # /usr/local/bin/ prefix on the command-name token is stripped before
   # comparison, so `/usr/bin/install` is recognised as `install`.
@@ -175,33 +219,77 @@ command_name_is() {
     [[ -z "$t" ]] && continue
     toks+=("$t")
   done < <(tokenize_args "$CMD")
-  local i prev_was_timeout=0
-  for i in "${!toks[@]}"; do
+
+  local idx
+  idx=$(_cn_find_verb_idx)
+  [ "$idx" -lt 0 ] && return 1
+
+  local t
+  t=$(strip_quotes "${toks[$idx]}")
+  t=$(_cn_strip_path_prefix "$t")
+  [ "$t" = "$target" ]
+}
+
+# --- Strip leading `sudo` plus its option-with-value pairs from CMD ---
+# Replaces the literal `${CMD#sudo }` strip in check_single_command.
+# Without opt-stripping, `sudo -u root install …` collapsed to
+# `-u root install …` — the orphaned `-u root` then mis-led the
+# wrapper-walk in strip_command_name_prefix / strip_command_name_quotes /
+# command_name_is (sudo is no longer in the token list to anchor to,
+# so `root` was treated as the verb). env / nice / ionice / timeout
+# are NOT literal-stripped, so the per-wrapper opt-skip in
+# _cn_find_verb_idx handles those wrappers in place.
+#
+# Walks past sudo + its option-with-value pairs (-u USER, --user=USER,
+# -g GROUP, etc.), value-less short and long flags (-n, --background,
+# etc.), and emits the rest of CMD starting at the first positional.
+# tokenize_args preserves quote bytes, so reconstruction with single-
+# space joins keeps quoted operands intact (whitespace inside the
+# command is normalised in the next pass anyway — guard.sh:280).
+#
+# Reported by Codex review round-4 on PR #23 (out-of-scope follow-up).
+strip_sudo_wrapper_with_opts() {
+  local cmd="$1"
+  case "$cmd" in
+    sudo|sudo[[:space:]]*) ;;
+    *) printf '%s' "$cmd"; return ;;
+  esac
+
+  local -a toks=()
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    toks+=("$t")
+  done < <(tokenize_args "$cmd")
+
+  # toks[0] is "sudo" (or absent if cmd was bare "sudo"). Walk past
+  # sudo's option-with-value pairs and value-less flags.
+  local i=1 n=${#toks[@]}
+  while [ $i -lt $n ]; do
     local raw="${toks[$i]}" t
     t=$(strip_quotes "$raw")
-    if [ $prev_was_timeout -eq 1 ]; then
-      prev_was_timeout=0
-      case "$t" in
-        [0-9]*) continue ;;
-      esac
-    fi
     case "$t" in
-      timeout)
-        prev_was_timeout=1; continue ;;
-      sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
-        continue ;;
+      -u|-g|-p|-h|-D|-C|-A|-K|-k|-r|-t)
+        i=$((i + 2)); continue ;;
+      --user|--group|--prompt|--host|--chdir|--auth-type|--close-from|--login|--other-user|--preserve-env|--shell|--type)
+        i=$((i + 2)); continue ;;
+      --*=*)
+        i=$((i + 1)); continue ;;
+      -*)
+        i=$((i + 1)); continue ;;
+      *) break ;;
     esac
-    case "$t" in
-      [A-Za-z_]*=*) continue ;;
-      -*) continue ;;
-    esac
-    case "$t" in
-      /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) t="${t##*/}" ;;
-    esac
-    [ "$t" = "$target" ]
-    return
   done
-  return 1
+
+  local out=""
+  while [ $i -lt $n ]; do
+    if [ -z "$out" ]; then
+      out="${toks[$i]}"
+    else
+      out="$out ${toks[$i]}"
+    fi
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
 }
 
 # --- Detect shell/source tokens by basename (handles any absolute path) ---
