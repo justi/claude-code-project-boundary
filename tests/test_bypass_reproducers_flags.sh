@@ -483,3 +483,37 @@ expect_allowed "git -c USER.Name='Foo Bar' status (case-insensitive non-sink)" \
   "git -c USER.Name='Foo Bar' status"
 
 echo ""
+
+# ============================================================
+# 38. git -c alias.<name>='!cmd' is an exec sink
+# ------------------------------------------------------------
+# git aliases support shell commands when the value starts with
+# `!`. `git -c alias.pwn='!rm /etc/x' pwn` runs the destructive
+# command as a shell command. Section 31 / 32 explicitly excluded
+# `alias.*` from the exec-sink regex (treating it as data only),
+# missing the bang-prefix exec form.
+#
+# Same shape as `submodule.<n>.update` (section 36) — only the
+# bang-prefixed variant is an exec sink. Generalises the previous
+# special-case to a list of bang-required keys: alias.<n>,
+# submodule.<n>.update, credential.helper.
+#
+# Reported by Codex review round-3 on PR #23 (P1).
+# ============================================================
+echo "--- 38. git -c alias.<n>='!cmd' exec sink ---"
+
+expect_blocked "git -c alias.pwn='!rm /etc/x' pwn" \
+  "git -c alias.pwn='!rm /etc/passwd_test' pwn"
+
+expect_blocked "git -c alias.foo='!sed -i s/a/b/ /etc/x' foo" \
+  "git -c alias.foo=\"!sed -i 's/a/b/' /etc/passwd_test\" foo"
+
+# True-negatives: non-bang aliases are git-internal subcommands,
+# not shell commands.
+expect_allowed "git -c alias.lg='log --oneline' lg (no bang)" \
+  "git -c alias.lg='log --oneline' lg"
+
+expect_allowed "git -c alias.co=checkout co (single subcommand)" \
+  "git -c alias.co=checkout co"
+
+echo ""

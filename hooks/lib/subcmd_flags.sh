@@ -63,7 +63,7 @@
 declare -a SUBCMD_FLAG_SINKS=(
   "tar||--to-command|value|"
   "rsync|-e|--rsh|value|"
-  "git|-c||git-config|^(core\\.(sshCommand|editor|pager|askPass|fsmonitor)|pager\\..+|sequence\\.editor|gpg\\.(program|ssh\\.program|openpgp\\.program|x509\\.program)|credential\\.helper|diff\\.(external|.+\\.(command|textconv))|mergetool\\..+\\.cmd|merge\\..+\\.driver|filter\\..+\\.(clean|smudge|process)|uploadpack\\.packObjectsHook|submodule\\..+\\.update)$"
+  "git|-c||git-config|^(core\\.(sshCommand|editor|pager|askPass|fsmonitor)|pager\\..+|sequence\\.editor|gpg\\.(program|ssh\\.program|openpgp\\.program|x509\\.program)|credential\\.helper|diff\\.(external|.+\\.(command|textconv))|mergetool\\..+\\.cmd|merge\\..+\\.driver|filter\\..+\\.(clean|smudge|process)|uploadpack\\.packObjectsHook|submodule\\..+\\.update|alias\\..+)$"
 )
 
 # --- Find verb token index, skipping wrappers / VAR=val / flags ---
@@ -212,11 +212,17 @@ extract_subcmd_flag_payloads() {
       [[ "$key" =~ $sink_key_regex ]] && _sf_key_match=1
       [ $_sf_nocase_was_on -eq 1 ] || shopt -u nocasematch
       if [ $_sf_key_match -eq 1 ]; then
-        # `submodule.<n>.update` is only an exec sink when the value
-        # starts with `!` — every other value is a reserved word
-        # (rebase / merge / checkout / none). Strip the bang before
-        # dispatching; skip altogether if it is missing.
-        if [[ "$key" =~ ^submodule\..+\.update$ ]]; then
+        # Bang-required keys: only an exec sink when the value
+        # starts with `!`; other values are reserved words or
+        # internal subcommand names (e.g. `submodule.<n>.update`
+        # accepts `rebase`/`merge`/`checkout`/`none`; `alias.<n>`
+        # without bang is a git-internal subcommand alias). Strip
+        # the bang before dispatching; skip altogether if missing.
+        local _sf_bang_match=0
+        shopt -s nocasematch
+        { [[ "$key" =~ ^submodule\..+\.update$ ]] || [[ "$key" =~ ^alias\..+$ ]]; } && _sf_bang_match=1
+        [ $_sf_nocase_was_on -eq 1 ] || shopt -u nocasematch
+        if [ $_sf_bang_match -eq 1 ]; then
           case "$subcmd_val" in
             '!'*) printf '%s\n' "${subcmd_val#!}" ;;
           esac
