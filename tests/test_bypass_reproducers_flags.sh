@@ -517,3 +517,53 @@ expect_allowed "git -c alias.co=checkout co (single subcommand)" \
   "git -c alias.co=checkout co"
 
 echo ""
+
+# ============================================================
+# 39. `git config <key> <value>` form
+# ------------------------------------------------------------
+# `git config` is the long-form alternative to `git -c`. Setting an
+# exec-sink config persistently runs the same shell command at the
+# next git operation; a destructive value is therefore still a
+# live exec sink even when set via `git config` rather than `-c`.
+# Sections 31-38 only recognised the `-c` flag-attached form.
+#
+# Forms to recognise:
+#   git config <key> <value>
+#   git config --global <key> <value>
+#   git config --system <key> <value>
+#   git config --local <key> <value>
+#   git config --file PATH <key> <value>
+#
+# Read-only forms (--get, --list, --get-all, --get-regexp) carry
+# no value to dispatch and must remain ALLOWED.
+#
+# Reported by Codex review round-3 on PR #23 (P2).
+# ============================================================
+echo "--- 39. git config <key> <value> exec-sink form ---"
+
+expect_blocked "git config core.sshCommand 'rm /etc/x'" \
+  "git config core.sshCommand 'rm /etc/passwd_test'"
+
+expect_blocked "git config --global core.sshCommand 'rm /etc/x'" \
+  "git config --global core.sshCommand 'rm /etc/passwd_test'"
+
+expect_blocked "git config --system gpg.program 'rm /etc/x'" \
+  "git config --system gpg.program 'rm /etc/passwd_test'"
+
+expect_blocked "git config --local credential.helper 'rm /etc/x'" \
+  "git config --local credential.helper 'rm /etc/passwd_test'"
+
+# True-negatives:
+expect_allowed "git config user.name 'Foo Bar' (data-only key)" \
+  "git config user.name 'Foo Bar'"
+
+expect_allowed "git config --get core.sshCommand (read-only get)" \
+  "git config --get core.sshCommand"
+
+expect_allowed "git config --list (list subcommand)" \
+  "git config --list"
+
+expect_allowed "git config --global user.email foo@bar.com" \
+  "git config --global user.email foo@bar.com"
+
+echo ""

@@ -107,6 +107,94 @@ _sf_strip_path_prefix() {
   esac
 }
 
+# --- Bang-prefix keys list (case-insensitive match) ---
+# Keys whose value is an exec sink ONLY when prefixed with `!`.
+# Centralised so the `-c` and `git config` branches use the same
+# rule. Reads $key from the caller's scope.
+_sf_key_requires_bang() {
+  local k="$1"
+  local was=0
+  shopt -q nocasematch && was=1
+  shopt -s nocasematch
+  local hit=0
+  { [[ "$k" =~ ^submodule\..+\.update$ ]] || [[ "$k" =~ ^alias\..+$ ]]; } && hit=1
+  [ $was -eq 1 ] || shopt -u nocasematch
+  return $((1 - hit))
+}
+
+# --- Helper: emit payload from a (key, value) pair, honouring bang rules ---
+_sf_emit_git_config_payload() {
+  local key="$1" subcmd_val="$2"
+  if _sf_key_requires_bang "$key"; then
+    case "$subcmd_val" in
+      '!'*) printf '%s\n' "${subcmd_val#!}" ;;
+    esac
+  else
+    printf '%s\n' "$subcmd_val"
+  fi
+}
+
+# --- `git config [opts] <key> <value>` form ---
+# Long-form alternative to `git -c <key>=<value>`. Setting an exec-
+# sink config persistently runs the same shell command at the next
+# git operation, so the value still needs validation. Reads tokens
+# from the module-local _SF_TOKS array.
+_sf_try_git_config_form() {
+  local v_idx="$1" key_regex="$2"
+  local n=${#_SF_TOKS[@]}
+
+  # Find the first non-flag, non-VAR=val token after the verb;
+  # that is the subverb (`config` for this form).
+  local subverb_idx=$((v_idx + 1))
+  while [ $subverb_idx -lt $n ]; do
+    local raw="${_SF_TOKS[$subverb_idx]}" t
+    t=$(strip_quotes "$raw")
+    case "$t" in
+      [A-Za-z_]*=*|-*) subverb_idx=$((subverb_idx + 1)); continue ;;
+    esac
+    break
+  done
+  [ $subverb_idx -ge $n ] && return
+  local subverb
+  subverb=$(strip_quotes "${_SF_TOKS[$subverb_idx]}")
+  [ "$subverb" = "config" ] || return
+
+  # Walk past `config`, collect at most two positionals (key, value).
+  # Two-token flags (`--file PATH`, `--blob OBJ`) consume their value;
+  # read-only flags (`--get*`, `--list`, `-l`) bail entirely.
+  local i=$((subverb_idx + 1))
+  local -a positionals=()
+  while [ $i -lt $n ] && [ ${#positionals[@]} -lt 2 ]; do
+    local raw="${_SF_TOKS[$i]}" t
+    t=$(strip_quotes "$raw")
+    case "$t" in
+      --file|--blob) i=$((i + 2)); continue ;;
+      --get|--get-all|--get-regexp|--get-urlmatch|--list|-l|--show-origin|--show-scope|--name-only|-e|--edit)
+        return ;;
+      --file=*|--blob=*|--unset|--unset-all|--add|--replace-all|--type=*|--null|-z|--global|--system|--local|--worktree|--includes|--no-includes|--default=*|--int|--bool|--bool-or-int|--path|--expiry-date|--*|-*)
+        i=$((i + 1)); continue ;;
+    esac
+    positionals+=("$raw")
+    i=$((i + 1))
+  done
+
+  [ ${#positionals[@]} -lt 2 ] && return
+
+  local key val
+  key=$(strip_quotes "${positionals[0]}")
+  val=$(strip_quotes "${positionals[1]}")
+
+  local _was=0
+  shopt -q nocasematch && _was=1
+  shopt -s nocasematch
+  local _match=0
+  [[ "$key" =~ $key_regex ]] && _match=1
+  [ $_was -eq 1 ] || shopt -u nocasematch
+  [ $_match -eq 0 ] && return
+
+  _sf_emit_git_config_payload "$key" "$val"
+}
+
 # --- Main entry: extract sub-command flag values from one subcommand ---
 # In:  single (post-split) command string
 # Out: zero or more payload strings on stdout, one per line. Empty
@@ -212,26 +300,18 @@ extract_subcmd_flag_payloads() {
       [[ "$key" =~ $sink_key_regex ]] && _sf_key_match=1
       [ $_sf_nocase_was_on -eq 1 ] || shopt -u nocasematch
       if [ $_sf_key_match -eq 1 ]; then
-        # Bang-required keys: only an exec sink when the value
-        # starts with `!`; other values are reserved words or
-        # internal subcommand names (e.g. `submodule.<n>.update`
-        # accepts `rebase`/`merge`/`checkout`/`none`; `alias.<n>`
-        # without bang is a git-internal subcommand alias). Strip
-        # the bang before dispatching; skip altogether if missing.
-        local _sf_bang_match=0
-        shopt -s nocasematch
-        { [[ "$key" =~ ^submodule\..+\.update$ ]] || [[ "$key" =~ ^alias\..+$ ]]; } && _sf_bang_match=1
-        [ $_sf_nocase_was_on -eq 1 ] || shopt -u nocasematch
-        if [ $_sf_bang_match -eq 1 ]; then
-          case "$subcmd_val" in
-            '!'*) printf '%s\n' "${subcmd_val#!}" ;;
-          esac
-        else
-          printf '%s\n' "$subcmd_val"
-        fi
+        _sf_emit_git_config_payload "$key" "$subcmd_val"
       fi
     else
       printf '%s\n' "$val"
     fi
   done
+
+  # `git config [opts] <key> <value>` — alternative assignment form
+  # of git's exec-sink config keys (same key regex, different shape
+  # than the `-c` flag). Run after the main walk so the `-c` flow
+  # is unaffected. Reported by Codex review round-3 on PR #23.
+  if [ "$verb" = "git" ] && [ "$sink_kind" = "git-config" ]; then
+    _sf_try_git_config_form "$verb_idx" "$sink_key_regex"
+  fi
 }
