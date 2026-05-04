@@ -15,6 +15,10 @@
 #   tar -xf … --to-command=<cmd>          [section 29]
 #   rsync -e / --rsh=<cmd>                [section 30]
 #   git -c core.sshCommand=<cmd>          [section 31]
+#   git -c <other-exec-key>=<cmd>         [section 32]
+#       core.editor / core.pager / pager.<cmd> / sequence.editor /
+#       gpg.program / gpg.ssh.program / credential.helper /
+#       diff.external / mergetool.<tool>.cmd
 #
 # The rewrite is intentionally simple: pull each sub-command value out
 # of the original command string and re-emit it as a sibling statement
@@ -54,7 +58,7 @@
 declare -a SUBCMD_FLAG_SINKS=(
   "tar||--to-command|value|"
   "rsync|-e|--rsh|value|"
-  "git|-c||git-config|^core\\.sshCommand$"
+  "git|-c||git-config|^(core\\.(sshCommand|editor|pager)|pager\\..+|sequence\\.editor|gpg\\.(program|ssh\\.program)|credential\\.helper|diff\\.external|mergetool\\..+\\.cmd)$"
 )
 
 # --- Find verb token index, skipping wrappers / VAR=val / flags ---

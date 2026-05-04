@@ -176,3 +176,76 @@ expect_allowed "git -c alias.lg='log --oneline' status (alias data)" \
   "git -c alias.lg='log --oneline' status"
 
 echo ""
+
+# ============================================================
+# 32. git -c <other-exec-sink-keys> — extend the key regex
+# ------------------------------------------------------------
+# git has more exec-sink config keys than just core.sshCommand
+# (covered in section 31). Each of these substitutes the value as
+# the program git invokes for some subsystem:
+#
+#   core.editor               commit / tag -a / rebase -i
+#   core.pager / pager.<cmd>  output paging
+#   sequence.editor           rebase -i todo edit
+#   gpg.program / gpg.ssh.program  signing
+#   credential.helper         auth
+#   diff.external             custom diff
+#   mergetool.<tool>.cmd      merge tool invocation
+#
+# This section extends the git-config kind's key regex to cover the
+# whole class. Benign data-only keys (user.*, color.*, alias.*,
+# init.*, http.proxy, safe.directory) must remain ALLOWED.
+#
+# Reported by Codex review follow-up after section 31.
+# ============================================================
+echo "--- 32. git -c extended exec-sink key coverage ---"
+
+expect_blocked "git -c core.editor='rm /etc/x' commit" \
+  "git -c core.editor='rm /etc/passwd_test' commit"
+
+expect_blocked "git -c core.pager='rm /etc/x' log" \
+  "git -c core.pager='rm /etc/passwd_test' log"
+
+expect_blocked "git -c pager.log='rm /etc/x' log (per-subcmd pager)" \
+  "git -c pager.log='rm /etc/passwd_test' log"
+
+expect_blocked "git -c sequence.editor='rm /etc/x' rebase" \
+  "git -c sequence.editor='rm /etc/passwd_test' rebase -i HEAD~1"
+
+expect_blocked "git -c gpg.program='rm /etc/x' commit -S" \
+  "git -c gpg.program='rm /etc/passwd_test' commit -S"
+
+expect_blocked "git -c gpg.ssh.program='rm /etc/x' commit -S" \
+  "git -c gpg.ssh.program='rm /etc/passwd_test' commit -S"
+
+expect_blocked "git -c credential.helper='rm /etc/x' fetch" \
+  "git -c credential.helper='rm /etc/passwd_test' fetch"
+
+expect_blocked "git -c diff.external='rm /etc/x' diff" \
+  "git -c diff.external='rm /etc/passwd_test' diff"
+
+expect_blocked "git -c mergetool.foo.cmd='rm /etc/x' mergetool" \
+  "git -c mergetool.foo.cmd='rm /etc/passwd_test' mergetool"
+
+# Positive cases — benign data keys must remain ALLOWED:
+expect_allowed "git -c http.proxy=http://proxy:8080 fetch (URL data)" \
+  "git -c http.proxy=http://proxy:8080 fetch"
+
+expect_allowed "git -c safe.directory=/path status (path data)" \
+  "git -c safe.directory=/some/path status"
+
+expect_allowed "git -c init.defaultBranch=main init" \
+  "git -c init.defaultBranch=main init"
+
+expect_allowed "git -c push.default=current push" \
+  "git -c push.default=current push"
+
+expect_allowed "git -c color.diff=auto diff (color benign)" \
+  "git -c color.diff=auto diff"
+
+# Edge: pager.log='less -R' is a benign pager invocation (in-project
+# binary `less`, no destructive payload). Validator must accept.
+expect_allowed "git -c pager.log='less -R' log (benign pager)" \
+  "git -c pager.log='less -R' log"
+
+echo ""
