@@ -220,6 +220,15 @@ check_single_command() {
     return 0
   fi
 
+  # Snapshot the command BEFORE sudo-strip and any other normalization,
+  # so extract_subcmd_flag_payloads can see the wrapper and its option-
+  # with-value flags (e.g. `sudo -u root tar --to-command='<payload>'`).
+  # The literal sudo-strip below removes only the bare `sudo ` token,
+  # leaving `-u root` behind — which would mis-identify the verb in
+  # the subcmd-flag scan. Reported by Copilot review on PR #23
+  # (guard.sh:897).
+  local _CMD_PRE_STRIP="$CMD"
+
   # --- Strip sudo prefix ---
   if [[ "$CMD" =~ ^sudo[[:space:]]+ ]]; then
     CMD="${CMD#sudo }"
@@ -892,9 +901,10 @@ check_single_command() {
   # payload from this (post-split) subcommand and dispatch it through
   # check_single_command recursively, reusing the entire detector
   # pipeline. Generic for the whole class — see hooks/lib/subcmd_flags.sh.
+  local _sf_payload
   while IFS= read -r _sf_payload; do
     [ -n "$_sf_payload" ] && check_single_command "$_sf_payload"
-  done < <(extract_subcmd_flag_payloads "$CMD")
+  done < <(extract_subcmd_flag_payloads "$_CMD_PRE_STRIP")
 
   # xargs, find-delete, rm, mv, cp, ln moved to hooks/lib/detectors/destructive.sh.
   run_destructive_detectors

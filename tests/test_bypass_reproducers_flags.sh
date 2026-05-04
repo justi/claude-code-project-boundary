@@ -567,3 +567,53 @@ expect_allowed "git config --global user.email foo@bar.com" \
   "git config --global user.email foo@bar.com"
 
 echo ""
+
+# ============================================================
+# 40. sudo / env / timeout opt-flags before the real verb
+# ------------------------------------------------------------
+# `_sf_find_verb_idx` skipped the wrapper command (`sudo`, `env`,
+# `nohup`, `timeout`, ...) but not its OPTION-WITH-VALUE flags.
+# For common forms like `sudo -u root tar --to-command='<payload>'`
+# the verb-finder treated `root` as the verb (not `tar`), so the
+# sink table never matched and the destructive payload slipped
+# past extract_subcmd_flag_payloads entirely.
+#
+# Fix: per-wrapper list of options-that-consume-the-next-token,
+# walked alongside the wrapper-skip pass. `sudo -u USER`,
+# `env -u VAR`, `timeout -k DUR`, `timeout -s SIG`, etc. now
+# advance the verb-finder past both the flag and its value.
+# Bonus: timeout duration suffix matching extended with `inf`/
+# `infinity`.
+#
+# Reported by Copilot review on PR #23 (guard.sh:897 — verb
+# mis-identification under sudo / env wrappers; subcmd_flags.sh:84
+# — timeout duration suffixes).
+# ============================================================
+echo "--- 40. wrapper opt-flags before verb ---"
+
+expect_blocked "sudo -u root tar --to-command='rm /etc/x'" \
+  "sudo -u root tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+expect_blocked "sudo --user=root tar (long attached, already ok) + payload" \
+  "sudo --user=root tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+expect_blocked "env -u FOO tar --to-command='rm /etc/x'" \
+  "env -u FOO tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+expect_blocked "timeout -k 5 10 tar --to-command='rm /etc/x'" \
+  "timeout -k 5 10 tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+expect_blocked "timeout -s 9 1.5s tar --to-command='rm /etc/x' (suffix duration)" \
+  "timeout -s 9 1.5s tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+expect_blocked "nice -n 10 tar --to-command='rm /etc/x'" \
+  "nice -n 10 tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+# Positive: wrapper without exec-sink-bearing verb stays ALLOWED.
+expect_allowed "sudo -u root ls (benign command, no sink)" \
+  "sudo -u root ls"
+
+expect_allowed "env -u FOO PROJECT-relative read (no sink)" \
+  "env -u FOO cat $PROJECT/CHANGELOG.md"
+
+echo ""

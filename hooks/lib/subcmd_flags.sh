@@ -66,31 +66,69 @@ declare -a SUBCMD_FLAG_SINKS=(
   "git|-c||git-config|^(core\\.(sshCommand|editor|pager|askPass|fsmonitor)|pager\\..+|sequence\\.editor|gpg\\.(program|ssh\\.program|openpgp\\.program|x509\\.program)|credential\\.helper|diff\\.(external|.+\\.(command|textconv))|mergetool\\..+\\.cmd|merge\\..+\\.driver|filter\\..+\\.(clean|smudge|process)|uploadpack\\.packObjectsHook|submodule\\..+\\.update|alias\\..+)$"
 )
 
+# --- Per-wrapper list of options that consume the NEXT token ---
+# Some wrappers take option-with-value flags before the real verb
+# (`sudo -u root cmd`, `env -u VAR cmd`, `timeout -k 5 10 cmd`).
+# Without skipping the value too, the verb-finder mis-identifies the
+# value as the verb (e.g. `root` instead of `cmd`), so the sink
+# table never matches. Reported by Copilot review on PR #23
+# (guard.sh:897). Returns a space-separated list on stdout; empty
+# for unknown wrappers.
+_sf_wrapper_opts_with_val() {
+  case "$1" in
+    sudo) printf -- '-u -g -p -h -D -C -A -K -k -r -t' ;;
+    env)  printf -- '-u -C -P --unset --chdir' ;;
+    timeout) printf -- '-k -s --kill-after --signal' ;;
+    nice) printf -- '-n --adjustment' ;;
+    ionice) printf -- '-c -n -p --class --classdata --pid' ;;
+    chrt) printf -- '-p --pid' ;;
+    *) ;;
+  esac
+}
+
 # --- Find verb token index, skipping wrappers / VAR=val / flags ---
 # Mirrors _rd_find_verb_idx in remote_dispatch.sh. Reads from the
-# module-local _SF_TOKS array (set by expand_subcmd_flags before
-# calling). Uses a global rather than `local -n` because macOS ships
-# bash 3.2 which lacks nameref support.
+# module-local _SF_TOKS array. Uses a global rather than `local -n`
+# because macOS ships bash 3.2 which lacks nameref support.
 _sf_find_verb_idx() {
-  local i prev_was_timeout=0
-  for i in "${!_SF_TOKS[@]}"; do
+  local i=0 n=${#_SF_TOKS[@]}
+  local prev_was_timeout=0 last_wrapper=""
+  while [ $i -lt $n ]; do
     local raw="${_SF_TOKS[$i]}" t
     t=$(strip_quotes "$raw")
+
+    # Wrapper opt-with-value: if the previous wrapper had options
+    # that consume the next token, advance past both the flag and
+    # its value (Copilot review on PR #23, guard.sh:897).
+    if [ -n "$last_wrapper" ]; then
+      local opts; opts=$(_sf_wrapper_opts_with_val "$last_wrapper")
+      if [ -n "$opts" ]; then
+        case " $opts " in
+          *" $t "*) i=$((i + 2)); continue ;;
+        esac
+      fi
+    fi
+
+    # `timeout` takes a duration operand (e.g. `timeout 5 cmd`,
+    # `timeout 1.5s cmd`, `timeout infinity cmd`); skip one extra
+    # token after it. Digit-prefixed forms cover `5`, `5s`, `2m`,
+    # `1.5h`; `inf*` covers `inf` / `infinity`.
     if [ $prev_was_timeout -eq 1 ]; then
       prev_was_timeout=0
       case "$t" in
-        [0-9]*) continue ;;
+        [0-9]*|inf*) i=$((i + 1)); continue ;;
       esac
     fi
     case "$t" in
       timeout)
-        prev_was_timeout=1; continue ;;
+        prev_was_timeout=1; last_wrapper="timeout"; i=$((i + 1)); continue ;;
       sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
-        continue ;;
+        last_wrapper=$(_sf_strip_path_prefix "$t")
+        i=$((i + 1)); continue ;;
     esac
     case "$t" in
-      [A-Za-z_]*=*) continue ;;
-      -*) continue ;;
+      [A-Za-z_]*=*) i=$((i + 1)); continue ;;
+      -*) i=$((i + 1)); continue ;;
     esac
     printf '%d' "$i"
     return
