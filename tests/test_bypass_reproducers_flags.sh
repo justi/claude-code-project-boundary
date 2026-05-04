@@ -121,3 +121,58 @@ expect_allowed "rsync --version" \
   "rsync --version"
 
 echo ""
+
+# ============================================================
+# 31. git -c core.sshCommand=<cmd> sink
+# ------------------------------------------------------------
+# git's `-c <key>=<value>` flag sets a config value for the duration
+# of one invocation. Several config keys are exec sinks: git uses
+# their value as the command line for an external program (ssh, gpg,
+# editor, credential helper, pager, ...). `core.sshCommand` is the
+# canonical example — its value replaces the ssh invocation when git
+# opens a remote connection, and a destructive value runs locally.
+#
+# Different shape from sections 29 / 30: the flag value is `key=cmd`
+# (a config assignment), not the command directly. Only specific
+# keys are exec sinks; benign keys like `user.name` carry data, not
+# code. The new "git-config" kind in SUBCMD_FLAG_SINKS uses a key
+# regex to discriminate.
+#
+# This section pins the regression for `core.sshCommand` only;
+# section 32 extends the regex to gpg.program / core.editor /
+# credential.helper / pager.*.
+#
+# Reported by adversarial round-2 review (Claude Code session,
+# 2026-05-04).
+# ============================================================
+echo "--- 31. git -c core.sshCommand sink ---"
+
+expect_blocked "git -c core.sshCommand='rm /etc/x' (detached)" \
+  "git -c core.sshCommand='rm /etc/passwd_test' clone foo"
+
+expect_blocked "git -c core.sshCommand=\"rm /etc/x\" (double-quoted)" \
+  "git -c core.sshCommand=\"rm /etc/passwd_test\" fetch"
+
+expect_blocked "git -ccore.sshCommand='rm /etc/x' (attached short form)" \
+  "git -ccore.sshCommand='rm /etc/passwd_test' clone foo"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - git with no -c
+# - git -c with a benign config key carrying ordinary data
+# - git -c with a key NOT in the exec-sink regex (color.ui, alias.*)
+expect_allowed "git status (no -c)" \
+  "git status"
+
+expect_allowed "git -c user.name='Foo Bar' status (benign data)" \
+  "git -c user.name='Foo Bar' status"
+
+expect_allowed "git -c user.email=foo@bar.com status" \
+  "git -c user.email=foo@bar.com status"
+
+expect_allowed "git -c color.ui=true status (benign config)" \
+  "git -c color.ui=true status"
+
+expect_allowed "git -c alias.lg='log --oneline' status (alias data)" \
+  "git -c alias.lg='log --oneline' status"
+
+echo ""
