@@ -39,6 +39,8 @@ source "$_GUARD_DIR/lib/detectors/write_targets.sh"
 source "$_GUARD_DIR/lib/options.sh"
 # shellcheck source=lib/remote_dispatch.sh
 source "$_GUARD_DIR/lib/remote_dispatch.sh"
+# shellcheck source=lib/subcmd_flags.sh
+source "$_GUARD_DIR/lib/subcmd_flags.sh"
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
