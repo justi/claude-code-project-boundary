@@ -79,32 +79,74 @@ _rd_is_remote_target_operand() {
   return 1
 }
 
+# --- Per-wrapper list of options that consume the NEXT token ---
+# Mirrors _sf_wrapper_opts_with_val (subcmd_flags.sh) and
+# _cn_wrapper_opts_with_val (command_name.sh). The three lists are
+# kept in sync but live in separate modules because each walks its
+# own token array — sharing a single helper would need bash 4
+# nameref support which macOS bash 3.2 lacks. See section 42 of
+# tests/test_bypass_reproducers_flags.sh for the over-block
+# scenarios this guards against.
+_rd_wrapper_opts_with_val() {
+  case "$1" in
+    sudo) printf -- '-u -g -p -h -D -C -A -K -k -r -t' ;;
+    env)  printf -- '-u -C -P --unset --chdir' ;;
+    timeout) printf -- '-k -s --kill-after --signal' ;;
+    nice) printf -- '-n --adjustment' ;;
+    ionice) printf -- '-c -n -p --class --classdata --pid' ;;
+    chrt) printf -- '-p --pid' ;;
+    *) ;;
+  esac
+}
+
 # --- Find command-name token index, skipping wrappers/flags/VAR=val ---
 # Mirrors the wrapper-skip rules used by strip_command_name_prefix and
 # command_name_is. Reads from the module-local _RD_TOKS array (set by
 # rewrite_remote_dispatch before calling). Returns -1 if no command-name
 # found. Uses a global rather than `local -n` because macOS ships
 # bash 3.2 which lacks nameref support.
+#
+# Also skips a per-wrapper option-with-value pair (e.g. `-u USER` for
+# sudo/env, `-k DUR` for timeout) when the value would otherwise be
+# mis-identified as the verb. Without this, `env -u FOO docker exec
+# ctr rm -rf /` mis-identified `FOO` as the verb (verb_pair="FOO
+# docker"), `rewrite_remote_dispatch` returned the cmd unchanged, and
+# the bare rm walker over-blocked the foreign-fs `rm -rf /` (which
+# actually runs inside the container, not on host). Same root cause
+# as section 40 (subcmd_flags.sh) and section 41 (command_name.sh);
+# Codex round-4 follow-up on PR #23.
 _rd_find_verb_idx() {
-  local i prev_was_timeout=0
-  for i in "${!_RD_TOKS[@]}"; do
+  local i=0 n=${#_RD_TOKS[@]}
+  local prev_was_timeout=0 last_wrapper=""
+  while [ $i -lt $n ]; do
     local raw="${_RD_TOKS[$i]}" t
     t=$(strip_quotes "$raw")
+
+    if [ -n "$last_wrapper" ]; then
+      local opts; opts=$(_rd_wrapper_opts_with_val "$last_wrapper")
+      if [ -n "$opts" ]; then
+        case " $opts " in
+          *" $t "*) i=$((i + 2)); continue ;;
+        esac
+      fi
+    fi
+
     if [ $prev_was_timeout -eq 1 ]; then
       prev_was_timeout=0
       case "$t" in
-        [0-9]*) continue ;;
+        [0-9]*|inf*) i=$((i + 1)); continue ;;
       esac
     fi
     case "$t" in
       timeout)
-        prev_was_timeout=1; continue ;;
+        prev_was_timeout=1; last_wrapper="timeout"; i=$((i + 1)); continue ;;
       sudo|env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
-        continue ;;
+        last_wrapper=$(_rd_strip_path_prefix "$t")
+        i=$((i + 1)); continue ;;
     esac
     case "$t" in
-      [A-Za-z_]*=*) continue ;;
-      -*) continue ;;
+      [A-Za-z_]*=*) i=$((i + 1)); continue ;;
+      -*) i=$((i + 1)); continue ;;
     esac
     printf '%d' "$i"
     return

@@ -717,3 +717,72 @@ expect_allowed "nice -n 10 ls (benign command)" \
   "nice -n 10 ls $PROJECT"
 
 echo ""
+
+# ============================================================
+# 42. Wrapper opt-flags before verb in remote_dispatch.sh
+# ------------------------------------------------------------
+# Final piece of the same wrapper-opt-flag root cause: `_rd_find_verb_idx`
+# in hooks/lib/remote_dispatch.sh skipped wrapper tokens (sudo / env /
+# nice / timeout / ionice) and bare `-flag` tokens, but NOT a wrapper's
+# option-with-value pairs. With `env -u FOO docker exec ctr rm -rf /`
+# the verb-finder treated `FOO` as the verb (not `docker`) and the
+# `docker exec` neutralisation never fired — leaving the foreign-fs
+# `rm -rf /` visible to the bare rm walker, which over-blocked the
+# (legitimate) container-side cleanup.
+#
+# Direction is OVER-block, not bypass: the broken neutralisation
+# leaves remote command strings exposed to the local-fs walkers, so
+# the failure mode is "false positive on legitimate `docker exec` /
+# `kubectl exec` / `ssh` invocations". The fix tightens the verb-
+# finder so the dispatch class is recognised and the cmd is correctly
+# collapsed before the local walkers run.
+#
+# Sudo cases are already covered by section 41's sudo-strip-with-opts
+# (sudo + opts are gone before rewrite_remote_dispatch sees CMD). This
+# section pins env / nice / timeout / ionice variants and keeps a
+# regression test for the kubectl cp download path that must stay
+# BLOCKED.
+#
+# Reported by Codex review round-4 on PR #23 (out-of-scope follow-up).
+# ============================================================
+echo "--- 42. wrapper opt-flags in remote_dispatch.sh ---"
+
+# Over-block fix: docker exec / kubectl exec must collapse cleanly so
+# the foreign-fs verb body is NOT walked by local-path walkers.
+expect_allowed "env -u FOO docker exec ctr rm -rf / (foreign fs)" \
+  "env -u FOO docker exec ctr rm -rf /"
+
+expect_allowed "nice -n 10 docker exec ctr rm -rf / (foreign fs)" \
+  "nice -n 10 docker exec ctr rm -rf /"
+
+expect_allowed "timeout -k 5 10 docker exec ctr rm -rf / (foreign fs)" \
+  "timeout -k 5 10 docker exec ctr rm -rf /"
+
+expect_allowed "ionice -c 3 docker exec ctr rm -rf / (foreign fs)" \
+  "ionice -c 3 docker exec ctr rm -rf /"
+
+expect_allowed "env -u FOO kubectl exec pod -- rm -rf / (foreign fs)" \
+  "env -u FOO kubectl exec pod -- rm -rf /"
+
+expect_allowed "nice -n 10 kubectl exec pod -- rm -rf / (foreign fs)" \
+  "nice -n 10 kubectl exec pod -- rm -rf /"
+
+# Regression-pin: even with the fix, kubectl cp / docker cp DOWNLOAD to
+# a host destination must STILL block. The remote-copy rewrite
+# (_rd_rewrite_remote_copy) emits a synthetic `cp <local-dst>` so the
+# cp walker validates the host-side write target.
+expect_blocked "env -u FOO kubectl cp pod:/x /etc/owned (download)" \
+  "env -u FOO kubectl cp pod:/x /etc/passwd_test"
+
+expect_blocked "nice -n 10 docker cp ctr:/x /etc/owned (download)" \
+  "nice -n 10 docker cp ctr:/x /etc/passwd_test"
+
+# True-negative: ssh remote command stays ALLOWED — the cmd runs on
+# the remote host and the local fs is not the target.
+expect_allowed "env -u FOO ssh host 'rm /etc/x' (remote dispatch)" \
+  "env -u FOO ssh host 'rm /etc/passwd_test'"
+
+expect_allowed "nice -n 10 ssh host 'rm /etc/x' (remote dispatch)" \
+  "nice -n 10 ssh host 'rm /etc/passwd_test'"
+
+echo ""
