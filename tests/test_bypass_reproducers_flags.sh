@@ -617,3 +617,103 @@ expect_allowed "env -u FOO PROJECT-relative read (no sink)" \
   "env -u FOO cat $PROJECT/CHANGELOG.md"
 
 echo ""
+
+# ============================================================
+# 41. Wrapper opt-flags before verb in command_name.sh helpers
+# ------------------------------------------------------------
+# Same root cause as section 40, different functions:
+# `strip_command_name_prefix`, `strip_command_name_quotes`, and
+# `command_name_is` in hooks/lib/command_name.sh skipped wrapper
+# tokens (sudo / env / nice / timeout / ionice / chrt) and bare
+# `-flag` tokens, but NOT a wrapper's option-with-value pairs.
+#
+# Three concrete bypasses fall out of this:
+#
+# 1. command_name_is install — the install detector is gated on
+#    the actual command-name token (by design, to avoid false-
+#    positives on `npm install` / `cargo install` / etc.). With
+#    `sudo -u root install ...`, the helper saw `-u` as a flag
+#    (skipped) and `root` as the verb; the install detector never
+#    fired and the destination was never validated.
+#
+# 2. strip_command_name_prefix — `/bin/rm` -> `rm` rewriting (so
+#    bare-name walkers match) gave up at the orphaned wrapper
+#    value. `sudo -u root /bin/rm /etc/x` left `/bin/rm` un-rewritten
+#    and the bare rm walker (`(^|\s)rm\s`) missed it.
+#
+# 3. strip_command_name_quotes — `"rm"` / `'rm'` -> `rm`,
+#    same pattern.
+#
+# Two-part fix (mirror section 40):
+#
+# A. _cn_wrapper_opts_with_val table per wrapper, walked alongside
+#    the existing wrapper-skip pass in all three helpers.
+#
+# B. The literal `sudo ` strip in check_single_command also strips
+#    sudo's option-value pairs (-u USER, --user=USER, etc.), so by
+#    the time the helpers run, `sudo -u root` has been removed
+#    entirely. Without (B) the post-sudo-strip CMD has orphaned
+#    `-u root` which the helper wrapper-walk cannot anchor (sudo
+#    is no longer in the token list). env / nice / ionice / timeout
+#    are NOT literal-stripped, so the per-wrapper opt-skip in (A)
+#    handles them on its own.
+#
+# Reported by Codex review round-4 on PR #23 (out-of-scope follow-up:
+# analogous wrapper-skip risk in command_name.sh / remote_dispatch.sh).
+# ============================================================
+echo "--- 41. wrapper opt-flags in command_name.sh helpers ---"
+
+# command_name_is install — sudo / env / nice / timeout / ionice variants.
+expect_blocked "sudo -u root install -m 755 ... /etc/owned" \
+  "sudo -u root install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "env -u FOO install -m 755 ... /etc/owned" \
+  "env -u FOO install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "nice -n 10 install -m 755 ... /etc/owned" \
+  "nice -n 10 install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "timeout -k 5 10 install -m 755 ... /etc/owned" \
+  "timeout -k 5 10 install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "ionice -c 3 install -m 755 ... /etc/owned" \
+  "ionice -c 3 install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+# strip_command_name_prefix — /bin/rm normalization under wrappers.
+expect_blocked "sudo -u root /bin/rm /etc/passwd_test" \
+  "sudo -u root /bin/rm /etc/passwd_test"
+
+expect_blocked "env -u FOO /bin/rm /etc/passwd_test" \
+  "env -u FOO /bin/rm /etc/passwd_test"
+
+expect_blocked "nice -n 10 /bin/rm /etc/passwd_test" \
+  "nice -n 10 /bin/rm /etc/passwd_test"
+
+expect_blocked "timeout -k 5 10 /bin/rm /etc/passwd_test" \
+  "timeout -k 5 10 /bin/rm /etc/passwd_test"
+
+# strip_command_name_quotes — quoted command name under wrappers.
+expect_blocked 'sudo -u root "rm" /etc/passwd_test' \
+  "sudo -u root \"rm\" /etc/passwd_test"
+
+expect_blocked "nice -n 10 'rm' /etc/passwd_test" \
+  "nice -n 10 'rm' /etc/passwd_test"
+
+# Long-form attached opt: --user=root must also be skipped from sudo.
+expect_blocked "sudo --user=root install -m 755 ... /etc/owned" \
+  "sudo --user=root install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+# True-negatives: legit reads / non-destructive uses must remain ALLOWED.
+expect_allowed "sudo -u root cat (read in-project)" \
+  "sudo -u root cat $PROJECT/CHANGELOG.md"
+
+expect_allowed "env -u FOO cat (read in-project)" \
+  "env -u FOO cat $PROJECT/CHANGELOG.md"
+
+expect_allowed "env -u FOO npm install (npm subcmd, not GNU install)" \
+  "env -u FOO npm install"
+
+expect_allowed "nice -n 10 ls (benign command)" \
+  "nice -n 10 ls $PROJECT"
+
+echo ""

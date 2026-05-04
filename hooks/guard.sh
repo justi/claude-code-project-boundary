@@ -229,11 +229,20 @@ check_single_command() {
   # (guard.sh:897).
   local _CMD_PRE_STRIP="$CMD"
 
-  # --- Strip sudo prefix ---
-  if [[ "$CMD" =~ ^sudo[[:space:]]+ ]]; then
-    CMD="${CMD#sudo }"
-    CMD="$(echo "$CMD" | sed 's/^[[:space:]]*//')"
-  fi
+  # --- Strip sudo prefix and its option-with-value pairs ---
+  # Bare `${CMD#sudo }` left orphaned options like `-u root` in front
+  # of the verb, which then mis-led the wrapper-walk in
+  # strip_command_name_prefix / strip_command_name_quotes /
+  # command_name_is — `root` got treated as the verb and the install
+  # / /bin/<name> / "<name>" normalisations all fell through. The
+  # helper below walks sudo's options-with-value (-u USER, --user=USER,
+  # -g GROUP, …) and value-less flags so `sudo -u root install …`
+  # collapses cleanly to `install …` before any downstream walker
+  # runs. env / nice / ionice / timeout / chrt are NOT literal-stripped
+  # — _cn_find_verb_idx (and its _sf_/_rd_ siblings) handle their
+  # opt-with-value pairs in place. Reported by Codex round-4 on PR #23.
+  CMD=$(strip_sudo_wrapper_with_opts "$CMD")
+  CMD="$(echo "$CMD" | sed 's/^[[:space:]]*//')"
 
   # --- Snapshot raw CMD before alias-escape / paren normalization ---
   # Alias normalization below strips `\` that precedes `[a-zA-Z_]`. That
