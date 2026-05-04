@@ -930,3 +930,72 @@ expect_allowed "sudo --chroot / ls (long-form chroot + benign)" \
   "sudo --chroot / ls $PROJECT"
 
 echo ""
+
+# ============================================================
+# 45. Empty-CMD shell-opening sudo (`sudo -i` / `sudo -s`)
+# ------------------------------------------------------------
+# When `strip_sudo_wrapper_with_opts` (commit 76cc301) consumes all
+# sudo flags and reaches the end of the token list with no positional
+# verb, it returns an empty string. Three shapes hit this:
+#
+#   sudo            bare invocation (prints usage; harmless)
+#   sudo -l|-V|-v   list creds / version / validate-only (harmless)
+#   sudo -i|-s      open a privileged interactive shell — DANGEROUS
+#   sudo --login    long-form -i (DANGEROUS)
+#   sudo --shell    long-form -s (DANGEROUS)
+#
+# The previous code didn't re-check for an empty CMD after the sudo
+# strip; downstream walkers ran on `""` and crashed (`tokens[@]:
+# unbound variable` under `set -u`) before exiting ALLOWED. Net
+# effect: a bare `bash` invocation correctly blocks (interactive
+# shell whose subsequent commands cannot be inspected), but `sudo -i`
+# (a strictly more privileged equivalent) slipped through.
+#
+# Fix: after the sudo strip, re-check for empty CMD. If empty AND
+# `_CMD_PRE_STRIP` contained `-i` / `-s` / `--login` / `--shell` as
+# a standalone token, block — same rationale as the existing bare
+# shell-execute walker. Otherwise return 0 (harmless empty).
+#
+# Reported by Codex review round-2 on PR #24 (P2 finding).
+# ============================================================
+echo "--- 45. empty-CMD shell-opening sudo ---"
+
+# Shell-opening sudo invocations must BLOCK (privileged interactive shell).
+expect_blocked "sudo -i (login shell)" \
+  "sudo -i"
+
+expect_blocked "sudo -s (shell)" \
+  "sudo -s"
+
+expect_blocked "sudo --login (long-form -i)" \
+  "sudo --login"
+
+expect_blocked "sudo --shell (long-form -s)" \
+  "sudo --shell"
+
+expect_blocked "sudo -A -i (askpass + login shell)" \
+  "sudo -A -i"
+
+expect_blocked "sudo -u root -i (user + login shell)" \
+  "sudo -u root -i"
+
+# True-negatives: harmless empty-after-strip shapes must remain ALLOWED.
+expect_allowed "bare sudo (prints usage, harmless)" \
+  "sudo"
+
+expect_allowed "sudo -l (list creds, harmless)" \
+  "sudo -l"
+
+expect_allowed "sudo -V (version, harmless)" \
+  "sudo -V"
+
+expect_allowed "sudo -v (validate timestamp, harmless)" \
+  "sudo -v"
+
+expect_allowed "sudo --list (long-form -l)" \
+  "sudo --list"
+
+expect_allowed "sudo --version (long-form -V)" \
+  "sudo --version"
+
+echo ""

@@ -244,6 +244,27 @@ check_single_command() {
   CMD=$(strip_sudo_wrapper_with_opts "$CMD")
   CMD="$(echo "$CMD" | sed 's/^[[:space:]]*//')"
 
+  # --- Empty CMD after sudo-strip: handle shell-opening forms ---
+  # `sudo -i` / `sudo -s` / `sudo --login` / `sudo --shell` open a
+  # privileged interactive shell whose subsequent commands cannot be
+  # inspected by this guard — strictly more dangerous than a bare
+  # `bash` invocation, which the existing shell-execute walker
+  # already blocks. After the strip consumes every sudo flag and
+  # reaches the end of the token list, CMD is empty; without this
+  # check the downstream walkers ran on "" (and crashed on
+  # `tokens[@]: unbound variable` under `set -u`) before exiting
+  # ALLOWED. Bare `sudo` / `sudo -l` / `sudo -V` / `sudo -v` are
+  # harmless and stay ALLOWED. Reported by Codex review round-2 on
+  # PR #24 (P2).
+  if [ -z "$CMD" ]; then
+    if [[ "$_CMD_PRE_STRIP" =~ (^|[[:space:]])-(i|s)([[:space:]]|$) ]] || \
+       [[ "$_CMD_PRE_STRIP" =~ (^|[[:space:]])--(login|shell)([[:space:]]|$) ]]; then
+      echo "BLOCKED: 'sudo -i' / 'sudo -s' / 'sudo --login' / 'sudo --shell' opens a privileged interactive shell whose subsequent commands cannot be inspected. Ask user for explicit permission." >&2
+      exit 2
+    fi
+    return 0
+  fi
+
   # --- Snapshot raw CMD before alias-escape / paren normalization ---
   # Alias normalization below strips `\` that precedes `[a-zA-Z_]`. That
   # breaks detection of a backslash-escaped heredoc delimiter `<<\EOF`
