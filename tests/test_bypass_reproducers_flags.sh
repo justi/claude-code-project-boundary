@@ -302,3 +302,45 @@ expect_allowed "git status && rsync -e ssh src host:dst (benign chain)" \
   "git status && rsync -e ssh $PROJECT/CHANGELOG.md host:/dst"
 
 echo ""
+
+# ============================================================
+# 34. rsync clustered short flags — `-avze <cmd>`
+# ------------------------------------------------------------
+# rsync (and getopt-style CLIs in general) accepts clustered short
+# flags: `-avze` is shorthand for `-a -v -z -e`. Because `-e`
+# consumes the next token as its value, a clustered form ending in
+# `e` makes the following token the exec-sink value. The previous
+# parser only recognised `-e VAL` (own token) and `-eVAL` (attached
+# form), so `rsync -avze 'rm /etc/x' src host:dst` slipped through.
+#
+# Fix: when the token is a short-flag cluster (starts with `-`,
+# does not start with `--`, longer than the bare short flag, and
+# its last character matches the sink's short-flag letter), treat
+# it like a detached short flag — consume the next token as the
+# value.
+#
+# Reported by Copilot review on PR #23 (subcmd_flags.sh:167).
+# ============================================================
+echo "--- 34. rsync clustered short flags ---"
+
+expect_blocked "rsync -avze 'rm /etc/x' src host:dst (full cluster)" \
+  "rsync -avze 'rm /etc/passwd_test' $PROJECT/CHANGELOG.md host:/dst"
+
+expect_blocked "rsync -ae 'rm /etc/x' src host:dst (minimal cluster)" \
+  "rsync -ae 'rm /etc/passwd_test' $PROJECT/CHANGELOG.md host:/dst"
+
+expect_blocked "rsync -ze 'rm /etc/x' src host:dst (compress + e)" \
+  "rsync -ze 'rm /etc/passwd_test' $PROJECT/CHANGELOG.md host:/dst"
+
+# Positive cases: clustered forms with a benign value, or clusters
+# whose last char is NOT `e` (no exec sink consumed).
+expect_allowed "rsync -avze ssh src host:dst (benign cluster)" \
+  "rsync -avze ssh $PROJECT/CHANGELOG.md host:/dst"
+
+expect_allowed "rsync -avz src dst (no -e at end)" \
+  "rsync -avz $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "rsync -avzh src dst (cluster ends in -h, not exec sink)" \
+  "rsync -avzh $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+echo ""

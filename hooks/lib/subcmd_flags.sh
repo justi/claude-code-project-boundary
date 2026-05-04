@@ -162,6 +162,17 @@ extract_subcmd_flag_payloads() {
       val="${tok#${sink_short}}"
       val=$(strip_quotes "$val")
       hit=1; i=$((i + 1))
+    elif [ -n "$sink_short" ] \
+        && [ "$tok" != "$sink_short" ] \
+        && [[ "$tok" == -[!-]*"${sink_short#-}" ]] \
+        && [ $((i + 1)) -lt $n ]; then
+      # Clustered short-flag form: `-avze <val>` where the cluster's
+      # last char matches the sink's short-flag letter and consumes
+      # the next token as its value (Copilot review on PR #23,
+      # subcmd_flags.sh:167). Excludes long flags (`--rsh`) via
+      # `-[!-]*` and the bare short flag via the inequality test.
+      val=$(strip_quotes "${_SF_TOKS[$((i + 1))]}")
+      hit=1; i=$((i + 2))
     else
       i=$((i + 1)); continue
     fi
