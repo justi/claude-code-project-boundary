@@ -872,3 +872,61 @@ expect_blocked "sudo -C 100 install ... /etc/owned (-C close-from takes value)" 
   "sudo -C 100 install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
 
 echo ""
+
+# ============================================================
+# 44. Missing sudo value-bearing flags — `-a` / `-R` / `--chroot`
+# ------------------------------------------------------------
+# Round-1 fixed `-A` / `-K` / `-k` / `--preserve-env` mis-listed as
+# value-bearing. Round-2 found the OPPOSITE error in the same set:
+# three sudo flags that DO take a value were missing from the
+# value-bearing list. Per `man sudo` (1.9.x):
+#
+#   -a type  / --auth-type=type   BSD authentication type
+#   -R dir   / --chroot=dir       chroot directory before running cmd
+#   -T sec   / --command-timeout  (already in list)
+#
+# Without these in the value-bearing branch, `sudo -a bsdauth install
+# ...` was walked as `bsdauth install ...` — the verb-finder treated
+# `bsdauth` as the verb and the install detector never fired. Same
+# bypass shape as round-1 but for a complementary subset of sudo's
+# option grammar.
+#
+# Fix: add `-a`, `-R`, `--chroot` to all four sites (three module
+# tables — _cn_ / _sf_ / _rd_ — plus strip_sudo_wrapper_with_opts).
+#
+# Reported by Codex review round-2 on PR #24 (P1).
+# ============================================================
+echo "--- 44. missing sudo value-bearing flags (-a / -R / --chroot) ---"
+
+# command_name_is install bypass.
+expect_blocked "sudo -a bsdauth install ... /etc/owned" \
+  "sudo -a bsdauth install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "sudo -R / install ... /etc/owned" \
+  "sudo -R / install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "sudo --chroot / install ... /etc/owned" \
+  "sudo --chroot / install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+# strip_command_name_prefix bypass on /bin/rm.
+expect_blocked "sudo -a bsdauth /bin/rm /etc/passwd_test" \
+  "sudo -a bsdauth /bin/rm /etc/passwd_test"
+
+expect_blocked "sudo -R / /bin/rm /etc/passwd_test" \
+  "sudo -R / /bin/rm /etc/passwd_test"
+
+# Subcmd-flag exec-sink bypass.
+expect_blocked "sudo -a bsdauth tar --to-command='rm /etc/x'" \
+  "sudo -a bsdauth tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+# True-negatives: legit sudo with these flags + read must remain ALLOWED.
+expect_allowed "sudo -a bsdauth cat (read in-project)" \
+  "sudo -a bsdauth cat $PROJECT/CHANGELOG.md"
+
+expect_allowed "sudo -R / cat (chroot + read)" \
+  "sudo -R / cat $PROJECT/CHANGELOG.md"
+
+expect_allowed "sudo --chroot / ls (long-form chroot + benign)" \
+  "sudo --chroot / ls $PROJECT"
+
+echo ""
