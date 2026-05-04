@@ -13,6 +13,7 @@
 # in CLAUDE.md):
 #
 #   tar -xf … --to-command=<cmd>          [section 29]
+#   rsync -e / --rsh=<cmd>                [section 30]
 #
 # The rewrite is intentionally simple: pull each sub-command value out
 # of the original command string and re-emit it as a sibling statement
@@ -51,6 +52,7 @@
 #   key_regex    - bash extended regex; used only when kind=git-config.
 declare -a SUBCMD_FLAG_SINKS=(
   "tar||--to-command|value|"
+  "rsync|-e|--rsh|value|"
 )
 
 # --- Find verb token index, skipping wrappers / VAR=val / flags ---

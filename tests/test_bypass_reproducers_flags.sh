@@ -74,3 +74,50 @@ expect_allowed "tar -xf --to-command='rm PROJECT/file' (in-project rm payload)" 
   "tar -xf $PROJECT/archive.tar --to-command='rm $PROJECT/tests/scratch.txt'"
 
 echo ""
+
+# ============================================================
+# 30. rsync -e / --rsh=<cmd> sink
+# ------------------------------------------------------------
+# rsync's -e (short) / --rsh (long) flag substitutes a custom remote
+# shell. rsync passes the substituted string to a `sh -c` invocation
+# at runtime, so a value like `rm /etc/x` is a live exec sink the
+# moment rsync would actually start a connection. Same shape as
+# tar --to-command (section 29).
+#
+# Both attached and detached forms must be covered: `rsync -e VAL`,
+# `rsync -eVAL`, `rsync --rsh=VAL`, `rsync --rsh VAL`.
+#
+# Reported by adversarial round-2 review (Claude Code session,
+# 2026-05-04).
+# ============================================================
+echo "--- 30. rsync -e / --rsh sink ---"
+
+expect_blocked "rsync -e 'rm /etc/x' (short detached)" \
+  "rsync -e 'rm /etc/passwd_test' $PROJECT/CHANGELOG.md host:/dst"
+
+expect_blocked "rsync --rsh='rm /etc/x' (long attached)" \
+  "rsync --rsh='rm /etc/passwd_test' $PROJECT/CHANGELOG.md host:/dst"
+
+expect_blocked "rsync --rsh 'rm /etc/x' (long detached)" \
+  "rsync --rsh 'rm /etc/passwd_test' $PROJECT/CHANGELOG.md host:/dst"
+
+expect_blocked "rsync -e \"sed -i s/a/b/ /etc/x\" (short detached, sed payload)" \
+  "rsync -e \"sed -i 's/a/b/' /etc/passwd_test\" $PROJECT/CHANGELOG.md host:/dst"
+
+# Positive cases that must remain ALLOWED after the fix:
+# - rsync without -e / --rsh
+# - rsync with benign -e value (ssh / ssh -p 22 — no destructive path)
+# - rsync --version, --help
+expect_allowed "rsync -a src dst (no -e, in project)" \
+  "rsync -a $PROJECT/CHANGELOG.md $PROJECT/tests/scratch.txt"
+
+expect_allowed "rsync -e ssh src host:dst (benign ssh value)" \
+  "rsync -e ssh $PROJECT/CHANGELOG.md host:/dst"
+
+expect_allowed "rsync --rsh='ssh -p 2222' src host:dst (ssh with port)" \
+  "rsync --rsh='ssh -p 2222' $PROJECT/CHANGELOG.md host:/dst"
+
+expect_allowed "rsync --version" \
+  "rsync --version"
+
+echo ""
