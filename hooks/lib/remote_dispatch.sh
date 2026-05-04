@@ -95,7 +95,7 @@ _rd_wrapper_opts_with_val() {
   # `sudo -A docker exec ...`), letting the local-fs walkers
   # over-block legit foreign-fs commands. Codex round-1 P1 on PR #24.
   case "$1" in
-    sudo) printf -- '-C -D -g -h -p -r -t -T -U -u --close-from --chdir --group --host --prompt --role --type --command-timeout --other-user --user --auth-type' ;;
+    sudo) printf -- '-a -C -D -g -h -p -R -r -t -T -U -u --auth-type --chdir --chroot --close-from --command-timeout --group --host --other-user --prompt --role --type --user' ;;
     env)  printf -- '-u -C -P --unset --chdir' ;;
     timeout) printf -- '-k -s --kill-after --signal' ;;
     nice) printf -- '-n --adjustment' ;;
