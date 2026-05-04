@@ -408,3 +408,46 @@ expect_allowed "git -c protocol.allow=user fetch" \
   "git -c protocol.allow=user fetch"
 
 echo ""
+
+# ============================================================
+# 36. More git-config exec-sink keys (gpg.<format>.program, submodule.<n>.update)
+# ------------------------------------------------------------
+# Codex round-2 review on PR #23 (Q8) flagged three more keys:
+#
+#   gpg.openpgp.program        OpenPGP signing program
+#   gpg.x509.program           X.509 / S/MIME signing program
+#   submodule.<name>.update    only an exec sink when value starts
+#                              with `!` (everything else is a
+#                              reserved word: rebase / merge /
+#                              checkout / none).
+#
+# `submodule.<n>.update` requires special handling: the new
+# git-config-bang kind strips the leading `!` before dispatching
+# the payload (and skips values that don't begin with `!`, since
+# those are reserved words, not commands).
+# ============================================================
+echo "--- 36. more git-config exec-sink keys ---"
+
+expect_blocked "git -c gpg.openpgp.program='rm /etc/x' commit -S" \
+  "git -c gpg.openpgp.program='rm /etc/passwd_test' commit -S"
+
+expect_blocked "git -c gpg.x509.program='rm /etc/x' commit -S" \
+  "git -c gpg.x509.program='rm /etc/passwd_test' commit -S"
+
+expect_blocked "git -c submodule.foo.update='!rm /etc/x' submodule update" \
+  "git -c submodule.foo.update='!rm /etc/passwd_test' submodule update"
+
+# Positive cases that must remain ALLOWED:
+expect_allowed "git -c submodule.foo.update=rebase submodule update" \
+  "git -c submodule.foo.update=rebase submodule update"
+
+expect_allowed "git -c submodule.foo.update=merge submodule update" \
+  "git -c submodule.foo.update=merge submodule update"
+
+expect_allowed "git -c submodule.foo.update=checkout submodule update" \
+  "git -c submodule.foo.update=checkout submodule update"
+
+expect_allowed "git -c submodule.foo.update=none submodule update" \
+  "git -c submodule.foo.update=none submodule update"
+
+echo ""

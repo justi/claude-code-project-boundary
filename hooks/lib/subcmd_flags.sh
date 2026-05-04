@@ -23,6 +23,9 @@
 #       core.askPass / core.fsmonitor / uploadpack.packObjectsHook /
 #       filter.<n>.clean / filter.<n>.smudge / filter.<n>.process /
 #       diff.<n>.command / diff.<n>.textconv / merge.<n>.driver
+#   git -c <bang-prefixed-exec-keys>      [section 36]
+#       gpg.openpgp.program / gpg.x509.program /
+#       submodule.<n>.update (with leading `!`)
 #
 # The mechanism is intentionally simple: extract each sub-command
 # value from a single (post-split) command and emit one payload per
@@ -60,7 +63,7 @@
 declare -a SUBCMD_FLAG_SINKS=(
   "tar||--to-command|value|"
   "rsync|-e|--rsh|value|"
-  "git|-c||git-config|^(core\\.(sshCommand|editor|pager|askPass|fsmonitor)|pager\\..+|sequence\\.editor|gpg\\.(program|ssh\\.program)|credential\\.helper|diff\\.(external|.+\\.(command|textconv))|mergetool\\..+\\.cmd|merge\\..+\\.driver|filter\\..+\\.(clean|smudge|process)|uploadpack\\.packObjectsHook)$"
+  "git|-c||git-config|^(core\\.(sshCommand|editor|pager|askPass|fsmonitor)|pager\\..+|sequence\\.editor|gpg\\.(program|ssh\\.program|openpgp\\.program|x509\\.program)|credential\\.helper|diff\\.(external|.+\\.(command|textconv))|mergetool\\..+\\.cmd|merge\\..+\\.driver|filter\\..+\\.(clean|smudge|process)|uploadpack\\.packObjectsHook|submodule\\..+\\.update)$"
 )
 
 # --- Find verb token index, skipping wrappers / VAR=val / flags ---
@@ -192,8 +195,23 @@ extract_subcmd_flag_payloads() {
       case "$val" in *=*) ;; *) continue ;; esac
       local key="${val%%=*}"
       local subcmd_val="${val#*=}"
+      # The token tokenizer keeps surrounding quotes around an
+      # attached value (e.g. `--c-flag-token` looks like
+      # `key='!cmd ...'` with the quotes intact). Strip them here so
+      # the bang-prefix check below sees the real first character.
+      subcmd_val=$(strip_quotes "$subcmd_val")
       if [[ "$key" =~ $sink_key_regex ]]; then
-        printf '%s\n' "$subcmd_val"
+        # `submodule.<n>.update` is only an exec sink when the value
+        # starts with `!` — every other value is a reserved word
+        # (rebase / merge / checkout / none). Strip the bang before
+        # dispatching; skip altogether if it is missing.
+        if [[ "$key" =~ ^submodule\..+\.update$ ]]; then
+          case "$subcmd_val" in
+            '!'*) printf '%s\n' "${subcmd_val#!}" ;;
+          esac
+        else
+          printf '%s\n' "$subcmd_val"
+        fi
       fi
     else
       printf '%s\n' "$val"
