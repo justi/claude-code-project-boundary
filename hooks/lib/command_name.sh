@@ -308,6 +308,128 @@ strip_sudo_wrapper_with_opts() {
   printf '%s' "$out"
 }
 
+# --- Detect a shell-opening sudo invocation ---
+# Returns 0 (success) iff the input describes a sudo invocation that
+# would open a privileged interactive shell with no command operand
+# to inspect. Recognised shapes:
+#
+#   sudo -i / sudo -s / sudo --login / sudo --shell      (standalone)
+#   sudo "-i" / sudo '-i' / sudo "--login"                (quoted —
+#                                                          tokenize_args
+#                                                          preserves quote
+#                                                          bytes; strip_quotes
+#                                                          unwraps them)
+#   sudo -ni / sudo -in / sudo -nis / sudo -A -ni         (clustered short
+#                                                          flags; sudo accepts
+#                                                          a cluster like -nis
+#                                                          for -n -i -s)
+#   <wrapper> [opts] sudo <any of the above>              (env / nice /
+#                                                          timeout / ionice /
+#                                                          chrt / nohup / time
+#                                                          / stdbuf / taskset /
+#                                                          command / builtin /
+#                                                          exec wrapping sudo)
+#
+# Returns 1 if no shell-opening sudo is detected — bare `sudo`,
+# `sudo -l` / `-V` / `-v`, `sudo -i extra-cmd` (cmd is what runs,
+# detectors walk it), and any non-sudo invocation.
+#
+# Called from check_single_command BEFORE the sudo strip so the
+# original wrapper + sudo + flag layout is still visible in the
+# token list. Reported by Codex review rounds 2–3 on PR #24.
+_cn_is_sudo_shell_opener() {
+  local cmd="$1"
+  local -a toks=()
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    toks+=("$t")
+  done < <(tokenize_args "$cmd")
+
+  local n=${#toks[@]}
+  [ "$n" -eq 0 ] && return 1
+
+  # Phase 1: walk past outer wrappers + their opt-with-value pairs.
+  # Mirrors _cn_find_verb_idx but stops on `sudo` (we're hunting
+  # specifically for sudo here, not for the verb in general). A non-
+  # wrapper non-flag token before `sudo` means the cmd isn't a
+  # sudo-shell-opener at all.
+  local i=0
+  local prev_was_timeout=0 last_wrapper=""
+  while [ "$i" -lt "$n" ]; do
+    local raw="${toks[$i]}" t
+    t=$(strip_quotes "$raw")
+
+    if [ -n "$last_wrapper" ]; then
+      local opts; opts=$(_cn_wrapper_opts_with_val "$last_wrapper")
+      if [ -n "$opts" ]; then
+        case " $opts " in
+          *" $t "*) i=$((i + 2)); continue ;;
+        esac
+      fi
+    fi
+
+    if [ "$prev_was_timeout" -eq 1 ]; then
+      prev_was_timeout=0
+      case "$t" in
+        [0-9]*|inf*) i=$((i + 1)); continue ;;
+      esac
+    fi
+    case "$t" in
+      timeout)
+        prev_was_timeout=1; last_wrapper="timeout"; i=$((i + 1)); continue ;;
+      env|/bin/env|/usr/bin/env|nice|nohup|time|stdbuf|ionice|chrt|taskset|command|builtin|exec)
+        last_wrapper=$(_cn_strip_path_prefix "$t")
+        i=$((i + 1)); continue ;;
+      sudo)
+        break ;;
+    esac
+    case "$t" in
+      [A-Za-z_]*=*) i=$((i + 1)); continue ;;
+      -*) i=$((i + 1)); continue ;;
+    esac
+    return 1
+  done
+
+  # No `sudo` token found in the wrapper-walk segment.
+  [ "$i" -ge "$n" ] && return 1
+
+  # Phase 2: walk sudo's flags. Track whether we saw a shell-opening
+  # flag. A positional non-flag token after sudo means it has a real
+  # command (cmd is what runs even with -i/-s; detectors walk it).
+  i=$((i + 1))
+  local found_shell_opener=0
+  while [ "$i" -lt "$n" ]; do
+    local raw="${toks[$i]}" t
+    t=$(strip_quotes "$raw")
+    case "$t" in
+      -i|-s|--login|--shell)
+        found_shell_opener=1
+        i=$((i + 1)); continue ;;
+      -a|-c|-C|-D|-g|-h|-p|-R|-r|-t|-T|-U|-u)
+        i=$((i + 2)); continue ;;
+      --auth-type|--chdir|--chroot|--close-from|--command-timeout|--group|--host|--login-class|--other-user|--prompt|--role|--type|--user)
+        i=$((i + 2)); continue ;;
+      --*=*)
+        i=$((i + 1)); continue ;;
+      -[A-Za-z]*)
+        # Clustered short flags. Sudo accepts -nis as the cluster of
+        # -n -i -s; if the cluster body contains `i` or `s`, the
+        # invocation opens a shell. Long-form `--*=*` was already
+        # handled above; this branch only fires for short clusters.
+        local body="${t#-}"
+        case "$body" in
+          *i*|*s*) found_shell_opener=1 ;;
+        esac
+        i=$((i + 1)); continue ;;
+      *)
+        # Positional verb after sudo — detectors walk it normally.
+        return 1 ;;
+    esac
+  done
+
+  [ "$found_shell_opener" -eq 1 ]
+}
+
 # --- Detect shell/source tokens by basename (handles any absolute path) ---
 # `/opt/homebrew/bin/bash`, `/nix/store/.../bin/bash`, `/bin/bash` all
 # count as the shell `bash`. Without basename matching, the exec guard

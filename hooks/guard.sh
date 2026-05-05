@@ -244,24 +244,25 @@ check_single_command() {
   CMD=$(strip_sudo_wrapper_with_opts "$CMD")
   CMD="$(echo "$CMD" | sed 's/^[[:space:]]*//')"
 
-  # --- Empty CMD after sudo-strip: handle shell-opening forms ---
+  # --- Block shell-opening sudo invocations ---
   # `sudo -i` / `sudo -s` / `sudo --login` / `sudo --shell` open a
   # privileged interactive shell whose subsequent commands cannot be
   # inspected by this guard — strictly more dangerous than a bare
   # `bash` invocation, which the existing shell-execute walker
-  # already blocks. After the strip consumes every sudo flag and
-  # reaches the end of the token list, CMD is empty; without this
-  # check the downstream walkers ran on "" (and crashed on
-  # `tokens[@]: unbound variable` under `set -u`) before exiting
-  # ALLOWED. Bare `sudo` / `sudo -l` / `sudo -V` / `sudo -v` are
-  # harmless and stay ALLOWED. Reported by Codex review round-2 on
-  # PR #24 (P2).
+  # already blocks. _cn_is_sudo_shell_opener also detects clustered
+  # forms (`sudo -ni` / `-in` / `-nis`), quoted forms (`sudo "-i"`),
+  # and outer-wrapper-prefixed forms (`env -u FOO sudo -i`), all of
+  # which Codex round-3 found slipped past the earlier regex. Runs
+  # on _CMD_PRE_STRIP so the original wrapper + sudo + flag layout
+  # is still visible. If empty CMD remains after sudo-strip but the
+  # original was bare `sudo` / `sudo -l` / `sudo -V` / `sudo -v`,
+  # this returns 1 and we fall through to the harmless-empty
+  # ALLOW. Reported by Codex review rounds 2–3 on PR #24 (P2).
+  if _cn_is_sudo_shell_opener "$_CMD_PRE_STRIP"; then
+    echo "BLOCKED: 'sudo -i' / 'sudo -s' / 'sudo --login' / 'sudo --shell' (also clustered like -ni / -nis, quoted, or wrapper-prefixed) opens a privileged interactive shell whose subsequent commands cannot be inspected. Ask user for explicit permission." >&2
+    exit 2
+  fi
   if [ -z "$CMD" ]; then
-    if [[ "$_CMD_PRE_STRIP" =~ (^|[[:space:]])-(i|s)([[:space:]]|$) ]] || \
-       [[ "$_CMD_PRE_STRIP" =~ (^|[[:space:]])--(login|shell)([[:space:]]|$) ]]; then
-      echo "BLOCKED: 'sudo -i' / 'sudo -s' / 'sudo --login' / 'sudo --shell' opens a privileged interactive shell whose subsequent commands cannot be inspected. Ask user for explicit permission." >&2
-      exit 2
-    fi
     return 0
   fi
 
