@@ -999,3 +999,42 @@ expect_allowed "sudo --version (long-form -V)" \
   "sudo --version"
 
 echo ""
+
+# ============================================================
+# 46. Missing sudo value-bearing flag — `-c` / `--login-class`
+# ------------------------------------------------------------
+# Round-2 added `-a` / `-R` / `--chroot`. Round-3 found one more
+# value-bearing sudo flag still absent from the list. Per `man sudo`
+# (1.9.x):
+#
+#   -c class / --login-class=class   BSD login class
+#
+# Without it in the value-bearing branch, `sudo -c staff install
+# ... /etc/owned` was walked as `staff install ...` — the verb-
+# finder treated `staff` as the verb. Same bypass shape as round-2
+# section 44 (-a / -R / --chroot), one missing flag.
+#
+# Reported by Codex review round-3 on PR #24 (P1).
+# ============================================================
+echo "--- 46. missing sudo value-bearing flag (-c / --login-class) ---"
+
+expect_blocked "sudo -c staff install ... /etc/owned" \
+  "sudo -c staff install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "sudo --login-class staff install ... /etc/owned" \
+  "sudo --login-class staff install -m 755 $PROJECT/CHANGELOG.md /etc/passwd_test"
+
+expect_blocked "sudo -c staff /bin/rm /etc/passwd_test" \
+  "sudo -c staff /bin/rm /etc/passwd_test"
+
+expect_blocked "sudo -c staff tar --to-command='rm /etc/x'" \
+  "sudo -c staff tar -xf $PROJECT/archive.tar --to-command='rm /etc/passwd_test'"
+
+# True-negatives: legit sudo with -c + read must remain ALLOWED.
+expect_allowed "sudo -c staff cat (login-class + read)" \
+  "sudo -c staff cat $PROJECT/CHANGELOG.md"
+
+expect_allowed "sudo --login-class staff ls (long-form + benign)" \
+  "sudo --login-class staff ls $PROJECT"
+
+echo ""
