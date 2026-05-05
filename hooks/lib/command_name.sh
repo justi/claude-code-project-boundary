@@ -32,7 +32,7 @@ _cn_wrapper_opts_with_val() {
   # as the value of `-A`), reopening the original bypass — Codex
   # round-1 P1 on PR #24.
   case "$1" in
-    sudo) printf -- '-a -C -D -g -h -p -R -r -t -T -U -u --auth-type --chdir --chroot --close-from --command-timeout --group --host --other-user --prompt --role --type --user' ;;
+    sudo) printf -- '-a -c -C -D -g -h -p -R -r -t -T -U -u --auth-type --chdir --chroot --close-from --command-timeout --group --host --login-class --other-user --prompt --role --type --user' ;;
     env)  printf -- '-u -C -P --unset --chdir' ;;
     timeout) printf -- '-k -s --kill-after --signal' ;;
     nice) printf -- '-n --adjustment' ;;
@@ -284,9 +284,9 @@ strip_sudo_wrapper_with_opts() {
     local raw="${toks[$i]}" t
     t=$(strip_quotes "$raw")
     case "$t" in
-      -a|-C|-D|-g|-h|-p|-R|-r|-t|-T|-U|-u)
+      -a|-c|-C|-D|-g|-h|-p|-R|-r|-t|-T|-U|-u)
         i=$((i + 2)); continue ;;
-      --auth-type|--chdir|--chroot|--close-from|--command-timeout|--group|--host|--other-user|--prompt|--role|--type|--user)
+      --auth-type|--chdir|--chroot|--close-from|--command-timeout|--group|--host|--login-class|--other-user|--prompt|--role|--type|--user)
         i=$((i + 2)); continue ;;
       --*=*)
         i=$((i + 1)); continue ;;
