@@ -421,6 +421,14 @@ _cn_is_sudo_shell_opener() {
           *i*|*s*) found_shell_opener=1 ;;
         esac
         i=$((i + 1)); continue ;;
+      -*)
+        # Long-form valueless flags (`--preserve-env`, `--background`,
+        # `--non-interactive`, `--set-home`, `--remove-timestamp`, ...)
+        # don't match `--*=*` (no `=`) nor `-[A-Za-z]*` (start with
+        # `--`). Without this catch-all they fall through to `*` and
+        # the helper bails before seeing the trailing `-i`/`-s` —
+        # bypass: `sudo --preserve-env -i`. Mirrors strip_sudo_wrapper_with_opts.
+        i=$((i + 1)); continue ;;
       *)
         # Positional verb after sudo — detectors walk it normally.
         return 1 ;;

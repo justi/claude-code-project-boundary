@@ -1143,3 +1143,27 @@ expect_allowed "env -u FOO sudo cat (wrapper + sudo + read)" \
   "env -u FOO sudo cat $PROJECT/CHANGELOG.md"
 
 echo ""
+
+# ============================================================
+# 48. Shell-opening sudo: long-form valueless flag before -i / -s
+# ------------------------------------------------------------
+# Phase 2 of `_cn_is_sudo_shell_opener` matches `-[A-Za-z]*` for
+# clustered shorts but falls through to `*) return 1` on long-form
+# valueless flags (`--preserve-env`, `--background`, `--set-home`,
+# ...) — they don't match `--*=*` (no `=`) nor `-[A-Za-z]*` (start
+# with `--`). Phase 2 then mis-treats them as a positional verb and
+# bails before seeing the shell-opener that follows.
+# Fix: `-*` catch-all before `*) return 1`.
+# ============================================================
+echo "--- 48. shell-opening sudo: long-form valueless flag before -i/-s ---"
+
+expect_blocked "sudo --preserve-env -i" "sudo --preserve-env -i"
+expect_blocked "sudo --background -s" "sudo --background -s"
+expect_blocked "sudo --non-interactive -i" "sudo --non-interactive -i"
+expect_blocked "env -u FOO sudo --preserve-env -i" "env -u FOO sudo --preserve-env -i"
+expect_blocked "sudo --preserve-env -ni (cluster after long valueless)" "sudo --preserve-env -ni"
+
+expect_allowed "sudo --preserve-env cat (long valueless + read)" \
+  "sudo --preserve-env cat $PROJECT/CHANGELOG.md"
+
+echo ""
