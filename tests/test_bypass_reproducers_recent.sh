@@ -1307,3 +1307,23 @@ expect_blocked "git -C / filter-branch --all (real destructive)" \
   "git -C / filter-branch --all"
 
 echo ""
+
+# ============================================================
+# 61. shell -c walker missing nu / pwsh (P3, Codex)
+# ------------------------------------------------------------
+# Sec 49/58 covered bash/sh/zsh/ksh/dash/fish/xonsh/tcsh/csh.
+# Codex round-2 review found nushell (`nu -c`) and PowerShell
+# Core (`pwsh -c`) still missing — both accept `-c CMD` with
+# un-inspectable semantics. pwsh ships via Homebrew on macOS;
+# nushell is rising in popularity.
+# ============================================================
+echo "--- 61. nu / pwsh -c ---"
+
+expect_blocked "nu -c destructive" \
+  "nu -c 'rm /etc/passwd_test'"
+expect_blocked "pwsh -c destructive" \
+  "pwsh -c 'rm /etc/passwd_test'"
+expect_blocked "/usr/local/bin/pwsh -c destructive" \
+  "/usr/local/bin/pwsh -c 'rm /etc/passwd_test'"
+
+echo ""
