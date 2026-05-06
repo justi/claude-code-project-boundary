@@ -1357,3 +1357,25 @@ expect_blocked "git -C / clean -df (no dry-run, no force letter? no — has f)" 
   "git -C / clean -df"
 
 echo ""
+
+# ============================================================
+# 63. git push --force-if-includes missing (P2, Codex r3)
+# ------------------------------------------------------------
+# Sec 60 push case covers (--force|--force-with-lease|-f). Git
+# 2.30+ added `--force-if-includes` (force only if local includes
+# remote tip). Same destructive class. Missing from the regex.
+# ============================================================
+echo "--- 63. git push --force-if-includes ---"
+
+expect_blocked "git -C / push --force-if-includes" \
+  "git -C / push --force-if-includes origin main"
+expect_blocked "git -C ~ push --force-if-includes" \
+  "git -C ~ push --force-if-includes"
+
+# Regression-pin.
+expect_blocked "git -C / push --force (still blocks)" \
+  "git -C / push --force origin main"
+expect_blocked "git -C / push --force-with-lease (still blocks)" \
+  "git -C / push --force-with-lease"
+
+echo ""

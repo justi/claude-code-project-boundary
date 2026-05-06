@@ -699,7 +699,7 @@ check_single_command() {
           checkout|restore)
             echo "$_git_args" | grep -qE '(^|[[:space:]])\.([[:space:]]|$)' && _git_destructive=1 ;;
           push)
-            echo "$_git_args" | grep -qE '(^|[[:space:]])(--force|--force-with-lease|-f)([[:space:]]|$)' && _git_destructive=1 ;;
+            echo "$_git_args" | grep -qE '(^|[[:space:]])(--force|--force-with-lease|--force-if-includes|-f)([[:space:]]|$)' && _git_destructive=1 ;;
           stash)
             echo "$_git_args" | grep -qE '(^|[[:space:]])(drop|clear)([[:space:]]|$)' && _git_destructive=1 ;;
           branch)
