@@ -685,8 +685,13 @@ check_single_command() {
         local _git_destructive=0
         case "$_git_verb" in
           clean)
+            # Dry-run regex parallel-bumped to match `n` anywhere in
+            # the cluster (`-ndf`, `-fnd`, `-dnf` all dry-run forms).
+            # Without this, force-cluster `-ndf` falsely hit the
+            # destructive branch even though `-n` means dry-run.
+            # Codex round-3 review on PR #25 (sec 62).
             if echo "$_git_args" | grep -qE '(^|[[:space:]])(-[a-zA-Z]*f[a-zA-Z]*|--force)([[:space:]]|$)' && \
-               ! echo "$_git_args" | grep -qE '(^|[[:space:]])(-[a-zA-Z]*n|--dry-run)([[:space:]]|$)'; then
+               ! echo "$_git_args" | grep -qE '(^|[[:space:]])(-[a-zA-Z]*n[a-zA-Z]*|--dry-run)([[:space:]]|$)'; then
               _git_destructive=1
             fi ;;
           reset)

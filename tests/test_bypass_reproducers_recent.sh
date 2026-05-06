@@ -1327,3 +1327,33 @@ expect_blocked "/usr/local/bin/pwsh -c destructive" \
   "/usr/local/bin/pwsh -c 'rm /etc/passwd_test'"
 
 echo ""
+
+# ============================================================
+# 62. git clean clustered dry-run -ndf over-block (P2, Codex r3)
+# ------------------------------------------------------------
+# Sec 60 walker checks `clean` for force AND absence of dry-run.
+# Force regex was extended to `-[a-zA-Z]*f[a-zA-Z]*` so clustered
+# `-fdx` matches. But the dry-run regex stayed at
+# `(-[a-zA-Z]*n|--dry-run)` — only matches if `n` is at end of
+# the cluster. `-ndf` (n + d + f, dry-run + recurse + force) has
+# `d` after `n` so the dry-run check fails, walker incorrectly
+# BLOCKS a legit dry-run invocation.
+# Fix: parallel-bump dry-run regex to `-[a-zA-Z]*n[a-zA-Z]*`.
+# ============================================================
+echo "--- 62. git clean clustered dry-run (-ndf, -nf) ---"
+
+# Dry-run forms must remain ALLOWED (no actual destruction).
+expect_allowed "git -C / clean -ndf (dry-run + force + d)" \
+  "git -C / clean -ndf"
+expect_allowed "git -C / clean -fnd (alt order)" \
+  "git -C / clean -fnd"
+expect_allowed "git -C / clean -dnf (alt order 2)" \
+  "git -C / clean -dnf"
+
+# Regression-pin: real destructive (no n in cluster) still BLOCKS.
+expect_blocked "git -C / clean -fdx (no dry-run)" \
+  "git -C / clean -fdx"
+expect_blocked "git -C / clean -df (no dry-run, no force letter? no — has f)" \
+  "git -C / clean -df"
+
+echo ""
