@@ -1189,3 +1189,28 @@ expect_allowed "git -C / show (read-only)" \
   "git -C / show HEAD"
 
 echo ""
+
+# ============================================================
+# 57. git -C outside: missing `replace -d` (P2, Codex)
+# ------------------------------------------------------------
+# `git replace -d <ref>` deletes a replace ref. Smaller blast
+# radius than filter-branch / submodule deinit but the same
+# class — destructive ref operation that should be blocked when
+# -C points outside.
+# ============================================================
+echo "--- 57. git -C / replace -d ---"
+
+expect_blocked "git -C / replace -d HEAD" \
+  "git -C / replace -d HEAD"
+expect_blocked "git -C ~ replace --delete refs/replace/abc" \
+  "git -C ~ replace --delete refs/replace/abc"
+expect_blocked "git --git-dir=/tmp/.git replace -d HEAD" \
+  "git --git-dir=/tmp/.git replace -d HEAD"
+
+# True-negatives.
+expect_allowed "git replace -d (in-project)" \
+  "git replace -d HEAD"
+expect_allowed "git -C / replace --list (read-only)" \
+  "git -C / replace --list"
+
+echo ""
