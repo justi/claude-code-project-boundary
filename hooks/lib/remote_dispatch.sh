@@ -79,32 +79,6 @@ _rd_is_remote_target_operand() {
   return 1
 }
 
-# --- Per-wrapper list of options that consume the NEXT token ---
-# Mirrors _sf_wrapper_opts_with_val (subcmd_flags.sh) and
-# _cn_wrapper_opts_with_val (command_name.sh). The three lists are
-# kept in sync but live in separate modules because each walks its
-# own token array — sharing a single helper would need bash 4
-# nameref support which macOS bash 3.2 lacks. See section 42 of
-# tests/test_bypass_reproducers_flags.sh for the over-block
-# scenarios this guards against.
-_rd_wrapper_opts_with_val() {
-  # Only flags that actually take a value go in this list — see the
-  # comment on _cn_wrapper_opts_with_val (command_name.sh) for the
-  # full classification rationale. Mis-listing a value-less sudo flag
-  # would mis-identify the verb under remote-dispatch wrappers (e.g.
-  # `sudo -A docker exec ...`), letting the local-fs walkers
-  # over-block legit foreign-fs commands. Codex round-1 P1 on PR #24.
-  case "$1" in
-    sudo) printf -- '-a -c -C -D -g -h -p -R -r -t -T -U -u --auth-type --chdir --chroot --close-from --command-timeout --group --host --login-class --other-user --prompt --role --type --user' ;;
-    env)  printf -- '-u -C -P --unset --chdir' ;;
-    timeout) printf -- '-k -s --kill-after --signal' ;;
-    nice) printf -- '-n --adjustment' ;;
-    ionice) printf -- '-c -n -p --class --classdata --pid' ;;
-    chrt) printf -- '-p --pid' ;;
-    *) ;;
-  esac
-}
-
 # --- Find command-name token index, skipping wrappers/flags/VAR=val ---
 # Mirrors the wrapper-skip rules used by strip_command_name_prefix and
 # command_name_is. Reads from the module-local _RD_TOKS array (set by
@@ -129,7 +103,7 @@ _rd_find_verb_idx() {
     t=$(strip_quotes "$raw")
 
     if [ -n "$last_wrapper" ]; then
-      local opts; opts=$(_rd_wrapper_opts_with_val "$last_wrapper")
+      local opts; opts=$(_wrapper_opts_with_val "$last_wrapper")
       if [ -n "$opts" ]; then
         case " $opts " in
           *" $t "*) i=$((i + 2)); continue ;;

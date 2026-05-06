@@ -23,6 +23,8 @@ _GUARD_DIR="$(cd "$(dirname "$_guard_source")" && pwd)"
 unset _guard_source _guard_target
 # shellcheck source=lib/tokenize.sh
 source "$_GUARD_DIR/lib/tokenize.sh"
+# shellcheck source=lib/wrapper_opts.sh
+source "$_GUARD_DIR/lib/wrapper_opts.sh"
 # shellcheck source=lib/command_name.sh
 source "$_GUARD_DIR/lib/command_name.sh"
 # shellcheck source=lib/paths.sh
