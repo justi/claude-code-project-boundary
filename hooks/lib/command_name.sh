@@ -10,38 +10,6 @@
 # command_name_is reads a CMD variable from its caller's dynamic
 # scope; other functions are pure.
 
-# --- Per-wrapper list of options that consume the NEXT token ---
-# Mirrors _sf_wrapper_opts_with_val in subcmd_flags.sh and
-# _rd_wrapper_opts_with_val in remote_dispatch.sh. The three lists
-# are kept in sync but live in separate modules because each module
-# walks its own token array (`local toks` here, module-level
-# `_SF_TOKS` / `_RD_TOKS` elsewhere) — sharing one helper would need
-# bash 4 nameref support which macOS bash 3.2 lacks. See the
-# comment in _sf_find_verb_idx for the bypass shape and section 41
-# of tests/test_bypass_reproducers_flags.sh for the reproducers.
-_cn_wrapper_opts_with_val() {
-  # Only flags that actually take a value go in this list; value-less
-  # flags (`-A`, `-k`, `-K`, `-E`, `-H`, `-i`, `-l`, `-n`, `-P`, `-S`,
-  # `-s`, `-V`, `-v`, `-b`, `-e`; `--askpass`, `--background`,
-  # `--preserve-env`, `--edit`, `--set-home`, `--login`,
-  # `--remove-timestamp`, `--reset-timestamp`, `--list`,
-  # `--non-interactive`, `--preserve-groups`, `--stdin`, `--shell`,
-  # `--version`, `--validate`) fall through to the generic `-*`
-  # branch (consume one token). Mis-listing a value-less flag here
-  # would skip the verb (`sudo -A install ...` -> `install` consumed
-  # as the value of `-A`), reopening the original bypass — Codex
-  # round-1 P1 on PR #24.
-  case "$1" in
-    sudo) printf -- '-a -c -C -D -g -h -p -R -r -t -T -U -u --auth-type --chdir --chroot --close-from --command-timeout --group --host --login-class --other-user --prompt --role --type --user' ;;
-    env)  printf -- '-u -C -P --unset --chdir' ;;
-    timeout) printf -- '-k -s --kill-after --signal' ;;
-    nice) printf -- '-n --adjustment' ;;
-    ionice) printf -- '-c -n -p --class --classdata --pid' ;;
-    chrt) printf -- '-p --pid' ;;
-    *) ;;
-  esac
-}
-
 # --- Strip /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/ prefix ---
 _cn_strip_path_prefix() {
   local n="$1"
@@ -82,7 +50,7 @@ _cn_find_verb_idx() {
     # identifies `root` as the verb (Codex round-4 follow-up on
     # PR #23; same root cause as section 40's _sf_find_verb_idx fix).
     if [ -n "$last_wrapper" ]; then
-      local opts; opts=$(_cn_wrapper_opts_with_val "$last_wrapper")
+      local opts; opts=$(_wrapper_opts_with_val "$last_wrapper")
       if [ -n "$opts" ]; then
         case " $opts " in
           *" $t "*) i=$((i + 2)); continue ;;
@@ -360,7 +328,7 @@ _cn_is_sudo_shell_opener() {
     t=$(strip_quotes "$raw")
 
     if [ -n "$last_wrapper" ]; then
-      local opts; opts=$(_cn_wrapper_opts_with_val "$last_wrapper")
+      local opts; opts=$(_wrapper_opts_with_val "$last_wrapper")
       if [ -n "$opts" ]; then
         case " $opts " in
           *" $t "*) i=$((i + 2)); continue ;;

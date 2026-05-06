@@ -646,8 +646,9 @@ echo ""
 #
 # Two-part fix (mirror section 40):
 #
-# A. _cn_wrapper_opts_with_val table per wrapper, walked alongside
-#    the existing wrapper-skip pass in all three helpers.
+# A. _wrapper_opts_with_val table (hooks/lib/wrapper_opts.sh) per
+#    wrapper, walked alongside the existing wrapper-skip pass in all
+#    three helpers.
 #
 # B. The literal `sudo ` strip in check_single_command also strips
 #    sudo's option-value pairs (-u USER, --user=USER, etc.), so by

@@ -66,31 +66,6 @@ declare -a SUBCMD_FLAG_SINKS=(
   "git|-c||git-config|^(core\\.(sshCommand|editor|pager|askPass|fsmonitor)|pager\\..+|sequence\\.editor|gpg\\.(program|ssh\\.program|openpgp\\.program|x509\\.program)|credential\\.helper|diff\\.(external|.+\\.(command|textconv))|mergetool\\..+\\.cmd|merge\\..+\\.driver|filter\\..+\\.(clean|smudge|process)|uploadpack\\.packObjectsHook|submodule\\..+\\.update|alias\\..+)$"
 )
 
-# --- Per-wrapper list of options that consume the NEXT token ---
-# Some wrappers take option-with-value flags before the real verb
-# (`sudo -u root cmd`, `env -u VAR cmd`, `timeout -k 5 10 cmd`).
-# Without skipping the value too, the verb-finder mis-identifies the
-# value as the verb (e.g. `root` instead of `cmd`), so the sink
-# table never matches. Reported by Copilot review on PR #23
-# (guard.sh:897). Returns a space-separated list on stdout; empty
-# for unknown wrappers.
-_sf_wrapper_opts_with_val() {
-  # Only flags that actually take a value go in this list — see the
-  # comment on _cn_wrapper_opts_with_val (command_name.sh) for the
-  # full classification rationale. Mis-listing a value-less sudo flag
-  # (`-A`, `-K`, `-k`, `--preserve-env`, ...) skips the real verb,
-  # reopening the section-40 bypass. Codex round-1 P1 on PR #24.
-  case "$1" in
-    sudo) printf -- '-a -c -C -D -g -h -p -R -r -t -T -U -u --auth-type --chdir --chroot --close-from --command-timeout --group --host --login-class --other-user --prompt --role --type --user' ;;
-    env)  printf -- '-u -C -P --unset --chdir' ;;
-    timeout) printf -- '-k -s --kill-after --signal' ;;
-    nice) printf -- '-n --adjustment' ;;
-    ionice) printf -- '-c -n -p --class --classdata --pid' ;;
-    chrt) printf -- '-p --pid' ;;
-    *) ;;
-  esac
-}
-
 # --- Find verb token index, skipping wrappers / VAR=val / flags ---
 # Mirrors _rd_find_verb_idx in remote_dispatch.sh. Reads from the
 # module-local _SF_TOKS array. Uses a global rather than `local -n`
@@ -106,7 +81,7 @@ _sf_find_verb_idx() {
     # that consume the next token, advance past both the flag and
     # its value (Copilot review on PR #23, guard.sh:897).
     if [ -n "$last_wrapper" ]; then
-      local opts; opts=$(_sf_wrapper_opts_with_val "$last_wrapper")
+      local opts; opts=$(_wrapper_opts_with_val "$last_wrapper")
       if [ -n "$opts" ]; then
         case " $opts " in
           *" $t "*) i=$((i + 2)); continue ;;
