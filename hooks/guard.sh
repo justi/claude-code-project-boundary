@@ -604,8 +604,10 @@ check_single_command() {
 
   # --- Block nested shell execution (bash -c, sh -c, eval) ---
   # Match: bash -c, sh -c, bash -lc, bash -ec, /bin/bash -c, /bin/sh -c, /usr/bin/env bash -c
-  if echo "$CMD" | grep -qE '(^|[[:space:]])(/usr/bin/env[[:space:]]+)?(/bin/)?(bash|sh)[[:space:]]+-[a-zA-Z]*c[[:space:]]'; then
-    echo "BLOCKED: Nested shell execution ('bash -c' / 'sh -c') cannot be safely inspected. Ask user for explicit permission." >&2
+  # Also zsh / ksh / dash / fish (macOS ships zsh by default; all accept
+  # -c CMD with the same un-inspectable semantics).
+  if echo "$CMD" | grep -qE '(^|[[:space:]])(/usr/bin/env[[:space:]]+)?(/bin/)?(bash|sh|zsh|ksh|dash|fish)[[:space:]]+-[a-zA-Z]*c[[:space:]]'; then
+    echo "BLOCKED: Nested shell execution ('bash -c' / 'sh -c' / 'zsh -c' / ...) cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
   fi
   if echo "$CMD" | grep -qE '(^|[[:space:]])eval[[:space:]]'; then
@@ -649,18 +651,18 @@ check_single_command() {
   fi
 
   # --- Block piping to sh/bash (e.g. echo "rm -rf /" | sh) ---
-  # Match bare shell invocations: sh, bash, /bin/sh, /bin/bash,
-  # and with flags: sh -s, bash --login, etc.
+  # Match bare shell invocations: sh, bash, zsh, ksh, dash, fish,
+  # /bin/sh, /bin/bash, ..., and with flags: sh -s, bash --login, etc.
   # But NOT: bash script.sh, bash -x script.sh (running a script file)
-  if echo "$CMD" | grep -qE '^(/bin/)?(sh|bash)$'; then
-    echo "BLOCKED: Piping to 'sh'/'bash' cannot be safely inspected. Ask user for explicit permission." >&2
+  if echo "$CMD" | grep -qE '^(/bin/)?(sh|bash|zsh|ksh|dash|fish)$'; then
+    echo "BLOCKED: Piping to 'sh'/'bash'/'zsh'/'ksh'/'dash'/'fish' cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
   fi
   # Match shell with only flags (no script file): sh -s, bash --login, sh -s -- args
-  if echo "$CMD" | grep -qE '^(/bin/)?(sh|bash)[[:space:]]+-'; then
+  if echo "$CMD" | grep -qE '^(/bin/)?(sh|bash|zsh|ksh|dash|fish)[[:space:]]+-'; then
     # Check if all args are flags (start with -), not a script path
     local shell_args
-    shell_args=$(echo "$CMD" | sed -E 's/^(\/bin\/)?(sh|bash)[[:space:]]+//')
+    shell_args=$(echo "$CMD" | sed -E 's/^(\/bin\/)?(sh|bash|zsh|ksh|dash|fish)[[:space:]]+//')
     local has_script=0
     for shell_token in $shell_args; do
       case "$shell_token" in

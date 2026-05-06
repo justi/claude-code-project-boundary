@@ -884,3 +884,40 @@ expect_allowed_cwd "rsync local target with colon-after-slash IN_PROJECT" \
   "/tmp"
 
 echo ""
+
+# ============================================================
+# 49. Non-bash shell `-c` walker: zsh / ksh / dash / fish
+# ------------------------------------------------------------
+# The nested-shell-execution walker (guard.sh:607) hardcoded the
+# regex `(bash|sh)` for `-c` inline-code blocks. zsh, ksh, dash, and
+# fish all accept `-c CMD` with the same un-inspectable semantics
+# but slipped past. macOS ships zsh by default, so `zsh -c <verb>`
+# is a real bypass. Same root cause for the pipe-to-shell walkers
+# below at guard.sh:655 / 660 (only `(sh|bash)` matched).
+# Fix: extend regexes to (bash|sh|zsh|ksh|dash|fish).
+# ============================================================
+echo "--- 49. non-bash shell -c walker ---"
+
+expect_blocked "zsh -c destructive" \
+  "zsh -c 'rm /etc/passwd_test'"
+expect_blocked "ksh -c destructive" \
+  "ksh -c 'rm /etc/passwd_test'"
+expect_blocked "dash -c destructive" \
+  "dash -c 'rm /etc/passwd_test'"
+expect_blocked "fish -c destructive" \
+  "fish -c 'rm /etc/passwd_test'"
+expect_blocked "/bin/zsh -c destructive" \
+  "/bin/zsh -c 'rm /etc/passwd_test'"
+expect_blocked "env zsh -c destructive" \
+  "/usr/bin/env zsh -c 'rm /etc/passwd_test'"
+expect_blocked "bare zsh piped (no script)" \
+  "echo 'rm /etc/passwd_test' | zsh"
+expect_blocked "zsh -s piped (only flags)" \
+  "echo 'rm /etc/passwd_test' | zsh -s"
+
+# True-negative: zsh running a script PATH inside project must stay ALLOWED
+# (file-path is the script-execution walker's territory, not -c).
+expect_allowed "zsh script-path inside project" \
+  "zsh $PROJECT/CHANGELOG.md"
+
+echo ""
