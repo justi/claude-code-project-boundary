@@ -602,6 +602,62 @@ check_single_command() {
     fi
   fi
 
+  # --- Block git -C / --git-dir outside-project + destructive subcmd ---
+  # The destructive-git walkers above (`if outside_context`) only fire
+  # when EFFECTIVE_CWD itself is outside project. But `git -C <path>`
+  # changes git's working dir for that invocation only — cwd stays
+  # in-project, so the cwd-based gate never engages and `git -C /
+  # clean -fdx` ran clean on / from in-project. Same shape for
+  # `--git-dir=<path>` (sets the .git directory).
+  # Pentest-reported bypass.
+  if echo "$CMD" | grep -qE '(^|[[:space:]])(/usr/bin/|/bin/)?git([[:space:]]|$)'; then
+    local git_C_path=""
+    local _gi=0 _gn=${#CMD_TOKENS_SCAN[@]}
+    local _git_seen=0
+    while [ $_gi -lt $_gn ]; do
+      local _gtok
+      _gtok=$(strip_quotes "${CMD_TOKENS_SCAN[$_gi]}")
+      if [ $_git_seen -eq 0 ]; then
+        case "$_gtok" in
+          git|/usr/bin/git|/bin/git) _git_seen=1 ;;
+        esac
+        _gi=$((_gi + 1)); continue
+      fi
+      case "$_gtok" in
+        -C|--git-dir|--work-tree)
+          _gi=$((_gi + 1))
+          if [ $_gi -lt $_gn ]; then
+            git_C_path=$(strip_quotes "${CMD_TOKENS_SCAN[$_gi]}")
+          fi
+          break ;;
+        --git-dir=*|--work-tree=*)
+          git_C_path="${_gtok#*=}"
+          break ;;
+        -c|-C*)
+          # `-c key=val` (config override) — skip pair; clustered `-C`
+          # can't happen in git's grammar so treat -C* as the boundary.
+          _gi=$((_gi + 2)); continue ;;
+        -*) _gi=$((_gi + 1)); continue ;;
+        *)  break ;;
+      esac
+    done
+
+    if [ -n "$git_C_path" ]; then
+      local _git_C_exp _git_C_resolved
+      _git_C_exp=$(expand_path "$git_C_path")
+      if [[ "$_git_C_exp" != /* ]]; then
+        _git_C_exp="$EFFECTIVE_CWD/$_git_C_exp"
+      fi
+      _git_C_resolved=$(resolve_path "$_git_C_exp")
+      if ! is_inside_project "$_git_C_resolved"; then
+        if echo "$CMD" | grep -qE '(clean[[:space:]]+(-[a-zA-Z]*f|--force)|reset[[:space:]]+--hard|checkout([[:space:]]+--)?[[:space:]]+\.|restore([[:space:]]+(--worktree|--staged|--))*[[:space:]]+\.|push[[:space:]]+.*(--force|-f)([[:space:]]|$)|stash[[:space:]]+(drop|clear)|branch[[:space:]]+(-D|--delete[[:space:]]+--force)|reflog[[:space:]]+expire|rm[[:space:]]+(-[a-zA-Z]*f|--force)|worktree[[:space:]]+remove)'; then
+          echo "BLOCKED: Destructive git operation with '-C' / '--git-dir' pointing OUTSIDE project directory '$PROJECT_DIR' (target: '$_git_C_resolved'). Ask user for explicit permission." >&2
+          exit 2
+        fi
+      fi
+    fi
+  fi
+
   # --- Block nested shell execution (bash -c, sh -c, eval) ---
   # Match: bash -c, sh -c, bash -lc, bash -ec, /bin/bash -c, /bin/sh -c, /usr/bin/env bash -c
   # Also zsh / ksh / dash / fish (macOS ships zsh by default; all accept

@@ -1037,3 +1037,55 @@ expect_allowed "mkdir -p inside project" \
   "mkdir -p $PROJECT/tests/a/b"
 
 echo ""
+
+# ============================================================
+# 53. git -C <outside-path> destructive walker
+# ------------------------------------------------------------
+# `git -C <path>` changes git's working dir to <path> for that
+# invocation. Existing git walkers (subcmd_flags `-c core.sshCommand`,
+# alias-exec, etc.) inspected the git invocation but didn't check
+# where git was operating. So `git -C / clean -fdx` ran clean on /
+# (deleting every untracked file) and `git -C ~ reset --hard`
+# nuked the user's home directory — both bypassed the boundary.
+#
+# Same shape for `--git-dir=<path>` (sets the .git directory) when
+# the path is outside the project AND the subcommand is destructive.
+#
+# Destructive git subcommands relevant here: clean -fd / -fdx,
+# reset --hard, checkout -- / restore --staged, rm -f, branch -D,
+# stash drop / clear, worktree remove.
+#
+# Fix: add a git -C walker to remote_dispatch.sh — when -C /
+# --git-dir / -c GIT_DIR= points outside project AND a destructive
+# subcommand follows, BLOCK with STRICT semantics. Read-only git
+# (-C path log, status, show, diff) stays ALLOWED.
+# ============================================================
+echo "--- 53. git -C outside-project destructive ---"
+
+expect_blocked "git -C / clean -fdx" \
+  "git -C / clean -fdx"
+expect_blocked "git -C ~ reset --hard" \
+  "git -C ~ reset --hard"
+expect_blocked "git -C /etc clean -fd" \
+  "git -C /etc clean -fd"
+expect_blocked "git -C /tmp/repo reset --hard HEAD~1" \
+  "git -C /tmp/repo reset --hard HEAD~1"
+expect_blocked "git --git-dir=/tmp/.git reset --hard" \
+  "git --git-dir=/tmp/.git reset --hard"
+
+# True-negatives: read-only git outside project must remain ALLOWED
+# (status / log / show don't write).
+expect_allowed "git -C / status (read-only)" \
+  "git -C / status"
+expect_allowed "git -C ~ log -1 (read-only)" \
+  "git -C ~ log -1"
+
+# True-negatives: destructive git INSIDE project must remain ALLOWED.
+expect_allowed "git clean -fd (in-project, current dir)" \
+  "git clean -fd"
+expect_allowed "git reset --hard (in-project, current dir)" \
+  "git reset --hard"
+expect_allowed "git -C \$PROJECT clean -fd (explicit in-project)" \
+  "git -C $PROJECT clean -fd"
+
+echo ""
