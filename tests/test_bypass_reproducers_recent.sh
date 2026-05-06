@@ -1236,3 +1236,41 @@ expect_blocked "/usr/bin/csh -c destructive" \
   "/usr/bin/csh -c 'rm /etc/passwd_test'"
 
 echo ""
+
+# ============================================================
+# 59. Quoted ~user is literal — fix false-positive (P3, Codex)
+# ------------------------------------------------------------
+# Sec 54 added ~user → sentinel substitution in expand_path. Codex
+# review found a false-positive: bash treats QUOTED tilde as
+# literal (no expansion). E.g. `rm "~root"/.bashrc` — bash sees
+# the literal path `~root/.bashrc` in CWD, not the user root's
+# home. The guard was stripping quotes first, then matching the
+# `~user` regex on the unquoted view, and substituting the
+# sentinel — incorrectly blocking a literal-path operation.
+#
+# Fix: detect quoted-tilde forms (`"~...`, `'~...`) BEFORE
+# stripping quotes; if the original input had `~` inside quotes,
+# skip tilde expansion (matches bash's behaviour of leaving
+# quoted ~ literal).
+# ============================================================
+echo "--- 59. quoted ~user is literal (no expansion) ---"
+
+# Quoted ~user must be treated as literal "~user/..." — if that
+# literal-name file exists in CWD (in-project), the operation is a
+# normal in-project deletion and must be ALLOWED. Without the fix,
+# the guard substitutes the sentinel and over-blocks.
+expect_allowed 'rm "~root"/file (literal-named, in-project)' \
+  "rm \"~root\"/file"
+
+expect_allowed "rm '~daemon'/file (single-quoted literal)" \
+  "rm '~daemon'/file"
+
+# Regression-pin: UNQUOTED ~user MUST still BLOCK (sec 54).
+expect_blocked "rm ~root/.bashrc (unquoted, real expansion)" \
+  "rm ~root/.bashrc"
+
+# Regression-pin: ~/ (current user) unchanged.
+expect_blocked "rm ~/.bashrc (unquoted current-user expansion)" \
+  "rm ~/.bashrc"
+
+echo ""
