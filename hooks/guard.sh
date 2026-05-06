@@ -650,7 +650,7 @@ check_single_command() {
       fi
       _git_C_resolved=$(resolve_path "$_git_C_exp")
       if ! is_inside_project "$_git_C_resolved"; then
-        if echo "$CMD" | grep -qE '(clean[[:space:]]+(-[a-zA-Z]*f|--force)|reset[[:space:]]+--hard|checkout([[:space:]]+--)?[[:space:]]+\.|restore([[:space:]]+(--worktree|--staged|--))*[[:space:]]+\.|push[[:space:]]+.*(--force|-f)([[:space:]]|$)|stash[[:space:]]+(drop|clear)|branch[[:space:]]+(-D|--delete[[:space:]]+--force)|reflog[[:space:]]+expire|rm[[:space:]]+(-[a-zA-Z]*f|--force)|worktree[[:space:]]+remove|submodule[[:space:]]+deinit[[:space:]]+.*(-[a-zA-Z]*f|--force))'; then
+        if echo "$CMD" | grep -qE '(clean[[:space:]]+(-[a-zA-Z]*f|--force)|reset[[:space:]]+--hard|checkout([[:space:]]+--)?[[:space:]]+\.|restore([[:space:]]+(--worktree|--staged|--))*[[:space:]]+\.|push[[:space:]]+.*(--force|-f)([[:space:]]|$)|stash[[:space:]]+(drop|clear)|branch[[:space:]]+(-D|--delete[[:space:]]+--force)|reflog[[:space:]]+expire|rm[[:space:]]+(-[a-zA-Z]*f|--force)|worktree[[:space:]]+remove|submodule[[:space:]]+deinit[[:space:]]+.*(-[a-zA-Z]*f|--force)|filter-branch([[:space:]]|$))'; then
           echo "BLOCKED: Destructive git operation with '-C' / '--git-dir' pointing OUTSIDE project directory '$PROJECT_DIR' (target: '$_git_C_resolved'). Ask user for explicit permission." >&2
           exit 2
         fi

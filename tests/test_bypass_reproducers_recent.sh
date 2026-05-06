@@ -1163,3 +1163,29 @@ expect_allowed "git submodule deinit (in-project)" \
   "git submodule deinit -f lib"
 
 echo ""
+
+# ============================================================
+# 56. git -C outside: missing `filter-branch` (P2, Codex)
+# ------------------------------------------------------------
+# `git filter-branch` rewrites every commit and ref in the repo —
+# pointed outside-project via -C, this rewrites the foreign repo's
+# entire history. Different destruction shape than working-tree
+# verbs (no rm/clean), but for a safety-net plugin it should be
+# blocked when -C points outside.
+# ============================================================
+echo "--- 56. git -C / filter-branch ---"
+
+expect_blocked "git -C / filter-branch --all" \
+  "git -C / filter-branch --all"
+expect_blocked "git -C ~ filter-branch HEAD" \
+  "git -C ~ filter-branch HEAD"
+expect_blocked "git --git-dir=/tmp/.git filter-branch --all" \
+  "git --git-dir=/tmp/.git filter-branch --all"
+
+# True-negatives.
+expect_allowed "git filter-branch (in-project)" \
+  "git filter-branch --all"
+expect_allowed "git -C / show (read-only)" \
+  "git -C / show HEAD"
+
+echo ""
