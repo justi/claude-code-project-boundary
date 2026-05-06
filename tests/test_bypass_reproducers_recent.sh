@@ -1132,3 +1132,34 @@ expect_blocked "rm ~/.bashrc (current user home)" \
   "rm ~/.bashrc"
 
 echo ""
+
+# ============================================================
+# 55. git -C outside: missing `submodule deinit -f` (P1, Codex)
+# ------------------------------------------------------------
+# Sec 53 added the git -C / --git-dir outside-project walker but
+# its destructive-subcommand regex covered clean / reset --hard /
+# checkout . / restore . / push --force / stash drop|clear /
+# branch -D / reflog expire / rm -f / worktree remove. Codex
+# adversarial review found `submodule deinit -f` missing —
+# `git -C / submodule deinit -f .` removes the submodule checkout
+# from the working tree, equivalent in destructiveness to
+# `rm -rf` on the submodule path.
+# Fix: add `submodule[[:space:]]+deinit[[:space:]]+(-[a-zA-Z]*f|--force)`
+# to the regex in guard.sh.
+# ============================================================
+echo "--- 55. git -C / submodule deinit -f ---"
+
+expect_blocked "git -C / submodule deinit -f ." \
+  "git -C / submodule deinit -f ."
+expect_blocked "git -C /etc submodule deinit --force lib" \
+  "git -C /etc submodule deinit --force lib"
+expect_blocked "git -C ~ submodule deinit -f ." \
+  "git -C ~ submodule deinit -f ."
+
+# True-negatives.
+expect_allowed "git -C / submodule status (read-only)" \
+  "git -C / submodule status"
+expect_allowed "git submodule deinit (in-project)" \
+  "git submodule deinit -f lib"
+
+echo ""
