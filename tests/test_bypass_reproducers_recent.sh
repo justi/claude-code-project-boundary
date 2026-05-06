@@ -998,3 +998,42 @@ expect_allowed "shred -u inside project" \
   "shred -u $PROJECT/tests/scratch.txt"
 
 echo ""
+
+# ============================================================
+# 52. mkdir creates directories outside project unchecked
+# ------------------------------------------------------------
+# `mkdir <path>` (and `mkdir -p`) was not in the walker list. While
+# mkdir is not destructive on existing files, it modifies filesystem
+# structure outside the project — a dropper for later writes (any
+# subsequent `cp` / `tee` / `rsync` into the new directory would
+# need its own walker to BLOCK, but the user clearly intended to
+# write outside the boundary). The plugin's purpose is "blocks
+# outside, allows inside", so creating directories outside violates
+# the contract.
+#
+# Walker uses WRITE semantics (is_write_permitted, allowlist applies
+# — same as `cp` / `mv` destinations). Walks every positional
+# operand after consuming -m MODE / -Z CTX flag+value pairs.
+# ============================================================
+echo "--- 52. mkdir outside project ---"
+
+expect_blocked "mkdir /etc/x" \
+  "mkdir /etc/passwd_test"
+expect_blocked "mkdir -p /etc/x" \
+  "mkdir -p /etc/passwd_test"
+expect_blocked "mkdir -p /etc/a/b/c" \
+  "mkdir -p /etc/a/b/c"
+expect_blocked "mkdir -m 755 /etc/x" \
+  "mkdir -m 755 /etc/passwd_test"
+expect_blocked "/bin/mkdir /etc/x" \
+  "/bin/mkdir /etc/passwd_test"
+expect_blocked "sudo mkdir -p /etc/x" \
+  "sudo mkdir -p /etc/passwd_test"
+
+# True-negatives: mkdir inside project must remain ALLOWED.
+expect_allowed "mkdir inside project" \
+  "mkdir $PROJECT/tests/scratch_dir"
+expect_allowed "mkdir -p inside project" \
+  "mkdir -p $PROJECT/tests/a/b"
+
+echo ""

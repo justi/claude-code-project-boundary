@@ -121,6 +121,64 @@ run_write_target_detectors() {
     done < <(tokenize_args "$install_raw")
   fi
 
+  # --- mkdir: directory creation outside project ---
+  # `mkdir <path>` (and `mkdir -p`) creates filesystem structure
+  # outside the project — a "dropper" enabling later writes there.
+  # The plugin's contract is "blocks outside, allows inside", so
+  # creating directories outside violates the boundary even though
+  # mkdir doesn't destroy existing files.
+  #
+  # Uses command_name_is to avoid false-positives on subcommands
+  # named `mkdir` (none in widespread use, but consistent with the
+  # `install` walker pattern).
+  #
+  # Walker handles -m MODE / -Z CTX / --mode= / --context= flag
+  # forms and POSIX `--`. Boundary uses is_inside_project: STRICT
+  # (creating dirs outside isn't a write to a known target file,
+  # so allowlist semantics don't naturally apply — fail closed).
+  if command_name_is mkdir; then
+    local mkdir_raw
+    mkdir_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])mkdir[[:space:]]+.*' | sed 's/^[[:space:]]*mkdir[[:space:]]*//' || true)
+    # Strip leading wrappers (sudo, env, /bin/) so the tokenize parses
+    # the post-mkdir args. command_name_is already matched mkdir so the
+    # token is real.
+    local mkdir_skip_next=0
+    local mkdir_seen_dashdash=0
+    while IFS= read -r TARGET; do
+      if [ "$mkdir_skip_next" -eq 1 ]; then
+        mkdir_skip_next=0
+        continue
+      fi
+      [[ -z "$TARGET" ]] && continue
+      if [ $mkdir_seen_dashdash -eq 0 ]; then
+        local mkdir_tok
+        mkdir_tok=$(strip_quotes "$TARGET")
+        if [ "$mkdir_tok" = "--" ]; then
+          mkdir_seen_dashdash=1
+          continue
+        fi
+        if [[ "$mkdir_tok" == -* ]]; then
+          case "$mkdir_tok" in
+            -m|--mode|-Z|--context)
+              mkdir_skip_next=1 ;;
+            --mode=*|--context=*)
+              : ;;
+          esac
+          continue
+        fi
+      fi
+      TARGET=$(expand_path "$TARGET")
+      if [[ "$TARGET" != /* ]]; then
+        TARGET="$EFFECTIVE_CWD/$TARGET"
+      fi
+      RESOLVED=$(resolve_path "$TARGET")
+      if ! is_inside_project "$RESOLVED"; then
+        echo "BLOCKED: 'mkdir' targets '$RESOLVED' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+    done < <(tokenize_args "$mkdir_raw")
+  fi
+
   # --- rsync command: check all non-flag path arguments ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])rsync($|[[:space:]])'; then
     local rsync_raw
