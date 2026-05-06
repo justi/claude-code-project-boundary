@@ -614,6 +614,7 @@ check_single_command() {
     local git_C_path=""
     local _gi=0 _gn=${#CMD_TOKENS_SCAN[@]}
     local _git_seen=0
+    local _git_C_anchor=-1
     while [ $_gi -lt $_gn ]; do
       local _gtok
       _gtok=$(strip_quotes "${CMD_TOKENS_SCAN[$_gi]}")
@@ -628,10 +629,12 @@ check_single_command() {
           _gi=$((_gi + 1))
           if [ $_gi -lt $_gn ]; then
             git_C_path=$(strip_quotes "${CMD_TOKENS_SCAN[$_gi]}")
+            _git_C_anchor=$((_gi + 1))
           fi
           break ;;
         --git-dir=*|--work-tree=*)
           git_C_path="${_gtok#*=}"
+          _git_C_anchor=$((_gi + 1))
           break ;;
         -c|-C*)
           # `-c key=val` (config override) — skip pair; clustered `-C`
@@ -650,8 +653,69 @@ check_single_command() {
       fi
       _git_C_resolved=$(resolve_path "$_git_C_exp")
       if ! is_inside_project "$_git_C_resolved"; then
-        if echo "$CMD" | grep -qE '(clean[[:space:]]+(-[a-zA-Z]*f|--force)|reset[[:space:]]+--hard|checkout([[:space:]]+--)?[[:space:]]+\.|restore([[:space:]]+(--worktree|--staged|--))*[[:space:]]+\.|push[[:space:]]+.*(--force|-f)([[:space:]]|$)|stash[[:space:]]+(drop|clear)|branch[[:space:]]+(-D|--delete[[:space:]]+--force)|reflog[[:space:]]+expire|rm[[:space:]]+(-[a-zA-Z]*f|--force)|worktree[[:space:]]+remove|submodule[[:space:]]+deinit[[:space:]]+.*(-[a-zA-Z]*f|--force)|filter-branch([[:space:]]|$)|replace[[:space:]]+(-d|--delete))'; then
-          echo "BLOCKED: Destructive git operation with '-C' / '--git-dir' pointing OUTSIDE project directory '$PROJECT_DIR' (target: '$_git_C_resolved'). Ask user for explicit permission." >&2
+        # Subcommand-aware destructive check. Walking tokens after the
+        # -C anchor and identifying the verb avoids false-positives on
+        # `git -C /tmp commit -m 'fix: avoid submodule deinit -f'` —
+        # the `-m` message body would otherwise trigger the destructive
+        # regex even though `commit` is benign. Codex round-2 review on
+        # PR #25 (sec 60).
+        local _gj=$_git_C_anchor _git_verb=""
+        while [ $_gj -lt $_gn ]; do
+          local _gjtok
+          _gjtok=$(strip_quotes "${CMD_TOKENS_SCAN[$_gj]}")
+          case "$_gjtok" in
+            -*) _gj=$((_gj + 1)); continue ;;
+            *)  _git_verb="$_gjtok"; break ;;
+          esac
+        done
+
+        # Reconstruct args-after-verb (verb's own flags only, never
+        # commit msgs from a different subcommand).
+        local _git_args=""
+        local _gk=$((_gj + 1))
+        while [ $_gk -lt $_gn ]; do
+          if [ -z "$_git_args" ]; then
+            _git_args="${CMD_TOKENS_SCAN[$_gk]}"
+          else
+            _git_args="$_git_args ${CMD_TOKENS_SCAN[$_gk]}"
+          fi
+          _gk=$((_gk + 1))
+        done
+
+        local _git_destructive=0
+        case "$_git_verb" in
+          clean)
+            if echo "$_git_args" | grep -qE '(^|[[:space:]])(-[a-zA-Z]*f[a-zA-Z]*|--force)([[:space:]]|$)' && \
+               ! echo "$_git_args" | grep -qE '(^|[[:space:]])(-[a-zA-Z]*n|--dry-run)([[:space:]]|$)'; then
+              _git_destructive=1
+            fi ;;
+          reset)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])--hard([[:space:]]|$)' && _git_destructive=1 ;;
+          checkout|restore)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])\.([[:space:]]|$)' && _git_destructive=1 ;;
+          push)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])(--force|--force-with-lease|-f)([[:space:]]|$)' && _git_destructive=1 ;;
+          stash)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])(drop|clear)([[:space:]]|$)' && _git_destructive=1 ;;
+          branch)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])(-D|--delete[[:space:]]+--force)([[:space:]]|$)' && _git_destructive=1 ;;
+          reflog)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])expire([[:space:]]|$)' && _git_destructive=1 ;;
+          rm)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])(-[a-zA-Z]*f[a-zA-Z]*|--force)([[:space:]]|$)' && _git_destructive=1 ;;
+          worktree)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])remove([[:space:]]|$)' && _git_destructive=1 ;;
+          submodule)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])deinit([[:space:]]|$)' && \
+              echo "$_git_args" | grep -qE '(^|[[:space:]])(-[a-zA-Z]*f[a-zA-Z]*|--force)([[:space:]]|$)' && _git_destructive=1 ;;
+          filter-branch)
+            _git_destructive=1 ;;
+          replace)
+            echo "$_git_args" | grep -qE '(^|[[:space:]])(-d|--delete)([[:space:]]|$)' && _git_destructive=1 ;;
+        esac
+
+        if [ "$_git_destructive" -eq 1 ]; then
+          echo "BLOCKED: Destructive git operation '$_git_verb' with '-C' / '--git-dir' pointing OUTSIDE project directory '$PROJECT_DIR' (target: '$_git_C_resolved'). Ask user for explicit permission." >&2
           exit 2
         fi
       fi

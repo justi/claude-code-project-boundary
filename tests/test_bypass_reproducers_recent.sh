@@ -1274,3 +1274,36 @@ expect_blocked "rm ~/.bashrc (unquoted current-user expansion)" \
   "rm ~/.bashrc"
 
 echo ""
+
+# ============================================================
+# 60. git -C destructive regex must use CMD_BLANKED (P2, Codex)
+# ------------------------------------------------------------
+# Sec 53/55-57 walker tests `echo "$CMD" | grep -qE '...'` against
+# the RAW command. But CMD contains heredoc bodies, --grep
+# patterns, -m commit messages, file paths — any of which may
+# contain literal text like "submodule deinit -f" or
+# "filter-branch" without being a real destructive invocation.
+# Result: false-positive BLOCK on benign commits / log searches.
+#
+# Fix: switch the dispatcher grep from $CMD to $CMD_BLANKED
+# (matches sec 49 / interpreter walker convention; heredoc bodies
+# are already blanked in CMD_BLANKED).
+# ============================================================
+echo "--- 60. git -C destructive must use CMD_BLANKED ---"
+
+# Benign commit message containing a dangerous-looking phrase —
+# must remain ALLOWED.
+expect_allowed "git -C /tmp commit -m mentions submodule deinit -f" \
+  "git -C /tmp commit -m 'fix: avoid submodule deinit -f'"
+expect_allowed "git -C /tmp log --grep=filter-branch (read-only search)" \
+  "git -C /tmp log --grep=filter-branch"
+expect_allowed "git -C /tmp log --oneline filter-branch (file path)" \
+  "git -C /tmp log --oneline filter-branch"
+
+# Regression-pin: real destructive forms still BLOCK.
+expect_blocked "git -C / submodule deinit -f . (real destructive)" \
+  "git -C / submodule deinit -f ."
+expect_blocked "git -C / filter-branch --all (real destructive)" \
+  "git -C / filter-branch --all"
+
+echo ""
