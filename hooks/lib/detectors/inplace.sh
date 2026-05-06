@@ -143,4 +143,60 @@ run_inplace_detectors() {
       tri=$((tri + 1))
     done
   fi
+
+  # --- perl/ruby in-place edit (-i / -pi / -i.bak) ---
+  # perl `-i`, `-pi`, `-i.bak`, ruby `-i`, `-i.bak` rewrite each FILE
+  # operand in place with the same write semantics as `sed -i`. The
+  # generic interpreter-with-inline-code walker (guard.sh:626) blocks
+  # bare `perl -e` / `ruby -e`, but mis-classifies `-pi` / `-i` (which
+  # don't end in c/e/E) as "not inline code" and lets the call through.
+  # File operands then escape boundary validation entirely. Pentest
+  # reported this as a real bypass for /etc/<file> targets.
+  #
+  # Walker engages only when an `-i*` / `-pi*` / `--in-place*` token
+  # is present, then walks every positional after consuming flag/value
+  # pairs (`-e CODE`, `-E CODE`, `-M MOD`, `--`). Mirrors the sed -i
+  # walker's POSIX `--` handling.
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(perl|ruby)([[:space:]]|$)'; then
+    local pr_has_inplace=0
+    local pr_tok
+    for pr_tok in "${CMD_TOKENS_SCAN[@]}"; do
+      local pr_t
+      pr_t=$(strip_quotes "$pr_tok")
+      case "$pr_t" in
+        -i|-i.*|-pi|-pi.*|--in-place|--in-place=*)
+          pr_has_inplace=1; break ;;
+      esac
+    done
+    if [ "$pr_has_inplace" -eq 1 ]; then
+      local pri=1 prn=${#CMD_TOKENS_SCAN[@]}
+      local pr_seen_dashdash=0
+      while [ $pri -lt $prn ]; do
+        local prtok
+        prtok=$(strip_quotes "${CMD_TOKENS_SCAN[$pri]}")
+        if [ $pr_seen_dashdash -eq 0 ]; then
+          case "$prtok" in
+            --)
+              pr_seen_dashdash=1; pri=$((pri + 1)); continue ;;
+            -e|-E|-M|-I|-x)
+              pri=$((pri + 2)); continue ;;
+            -*|'')
+              pri=$((pri + 1)); continue ;;
+          esac
+        fi
+        local prexp
+        prexp=$(expand_path "$prtok")
+        if [[ "$prexp" != /* ]]; then
+          prexp="$EFFECTIVE_CWD/$prexp"
+        fi
+        local prresolved
+        prresolved=$(resolve_path "$prexp")
+        if ! is_write_permitted "$prresolved"; then
+          echo "BLOCKED: in-place edit ('perl -i' / 'ruby -i') targets '$prresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+        pri=$((pri + 1))
+      done
+    fi
+  fi
 }

@@ -921,3 +921,46 @@ expect_allowed "zsh script-path inside project" \
   "zsh $PROJECT/CHANGELOG.md"
 
 echo ""
+
+# ============================================================
+# 50. In-place editor walker covered only sed/truncate (perl/ruby)
+# ------------------------------------------------------------
+# inplace.sh walked sed -i and truncate; perl `-pi` / `-i` and ruby
+# `-i` rewrite the file in place with identical write semantics but
+# were never inspected. So `perl -pi -e "..." /etc/passwd_test`
+# silently overwrote files outside the project.
+#
+# Bypass shapes:
+#   perl -pi -e "..." /etc/x
+#   perl -i -ne "..." /etc/x
+#   perl -i.bak -pe "..." /etc/x       (in-place with backup suffix)
+#   ruby -i -pe "" /etc/x
+#   ruby -i.bak -pe "" /etc/x
+#
+# Fix: add a perl/ruby in-place walker mirroring sed -i — engages
+# only when -i / -pi / --in-place is present, then walks every
+# positional file operand through is_write_permitted.
+# ============================================================
+echo "--- 50. in-place edit: perl -pi / ruby -i ---"
+
+expect_blocked "perl -pi outside" \
+  "perl -pi -e 's/x/y/' /etc/passwd_test"
+expect_blocked "perl -i outside" \
+  "perl -i -ne 'print' /etc/passwd_test"
+expect_blocked "perl -i.bak outside" \
+  "perl -i.bak -pe 's/x/y/' /etc/passwd_test"
+expect_blocked "ruby -i outside" \
+  "ruby -i -pe '' /etc/passwd_test"
+expect_blocked "ruby -i.bak outside" \
+  "ruby -i.bak -pe '' /etc/passwd_test"
+
+# True-negatives: in-place forms targeting in-project files must stay ALLOWED.
+# (Note: bare `perl -e CODE` / `ruby -e CODE` are already BLOCKED by the
+# generic interpreter-with-inline-code walker at guard.sh:626 — that is a
+# separate fail-closed rule, not the in-place walker we add here.)
+expect_allowed "perl -pi inside project" \
+  "perl -pi -e 's/x/y/' $PROJECT/CHANGELOG.md"
+expect_allowed "ruby -i inside project" \
+  "ruby -i -pe '' $PROJECT/CHANGELOG.md"
+
+echo ""
