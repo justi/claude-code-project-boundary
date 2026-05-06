@@ -1214,3 +1214,25 @@ expect_allowed "git -C / replace --list (read-only)" \
   "git -C / replace --list"
 
 echo ""
+
+# ============================================================
+# 58. shell -c walker missed xonsh / tcsh / csh (P2, Codex)
+# ------------------------------------------------------------
+# Sec 49 extended the `-c` walker to bash/sh/zsh/ksh/dash/fish.
+# Codex review found xonsh / tcsh / csh still slipping through —
+# all three accept `-c CMD` with the same un-inspectable
+# semantics. Less common than zsh on macOS but still a real
+# bypass vector for users who installed them.
+# ============================================================
+echo "--- 58. xonsh / tcsh / csh -c walker ---"
+
+expect_blocked "xonsh -c destructive" \
+  "xonsh -c 'rm /etc/passwd_test'"
+expect_blocked "tcsh -c destructive" \
+  "tcsh -c 'rm /etc/passwd_test'"
+expect_blocked "csh -c destructive" \
+  "csh -c 'rm /etc/passwd_test'"
+expect_blocked "/usr/bin/csh -c destructive" \
+  "/usr/bin/csh -c 'rm /etc/passwd_test'"
+
+echo ""
