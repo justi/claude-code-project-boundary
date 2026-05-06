@@ -1089,3 +1089,46 @@ expect_allowed "git -C \$PROJECT clean -fd (explicit in-project)" \
   "git -C $PROJECT clean -fd"
 
 echo ""
+
+# ============================================================
+# 54. ~user tilde expansion bypassed boundary check
+# ------------------------------------------------------------
+# `expand_path` handled `~/` (current user's HOME) and bare `~` but
+# not `~user/path` (other-user home, e.g. `~root/.bashrc` →
+# `/var/root/.bashrc` on macOS). Without expansion, the path stayed
+# as relative-looking `~user/...`, the caller prepended
+# EFFECTIVE_CWD ("$PROJECT/~user/..."), and is_inside_project
+# returned TRUE — so `rm ~root/.bashrc` ALLOWED.
+#
+# Bash expands `~user` to that user's actual home at exec time, so
+# the real target was always outside the project.
+#
+# Fix: add a `~user` branch in expand_path that substitutes a
+# sentinel non-project absolute path (e.g. `/__tilde_other_user/`).
+# We can't safely resolve to the real home without exec'ing
+# getent/dscl/eval — fail-closed by routing the path through a
+# guaranteed-outside-project prefix.
+# ============================================================
+echo "--- 54. ~user tilde expansion ---"
+
+expect_blocked "rm ~root/.bashrc" \
+  "rm ~root/.bashrc"
+expect_blocked "rm ~daemon/x" \
+  "rm ~daemon/x"
+expect_blocked "cat /etc/passwd > ~root/x" \
+  "cat /etc/passwd > ~root/x"
+expect_blocked "tee ~root/x" \
+  "echo y | tee ~root/x"
+expect_blocked "cp file ~root/" \
+  "cp $PROJECT/CHANGELOG.md ~root/"
+expect_blocked "sed -i ~root/.bashrc" \
+  "sed -i '' 's/x/y/' ~root/.bashrc"
+
+# True-negatives: ~/  (current user's home) is unchanged behavior
+# — still resolves to $HOME and gets normal treatment.
+# Note: $HOME itself is outside project, so `rm ~/.bashrc` SHOULD
+# block (this was already the case pre-patch).
+expect_blocked "rm ~/.bashrc (current user home)" \
+  "rm ~/.bashrc"
+
+echo ""

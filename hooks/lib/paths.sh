@@ -116,6 +116,17 @@ expand_path() {
     p="$HOME/${p#\~/}"
   elif [[ "$p" == "~" ]]; then
     p="$HOME"
+  elif [[ "$p" =~ ^~[a-zA-Z_][a-zA-Z0-9_.-]* ]]; then
+    # `~user/path` — bash expands to the named user's home dir at
+    # exec time (e.g. `~root` → `/var/root` on macOS, `/root` on
+    # Linux). Without exec'ing getent/dscl/eval we can't safely
+    # resolve to the actual home, but the result is NEVER inside
+    # the project dir. Substitute a sentinel absolute path so
+    # is_inside_project / is_write_permitted naturally fail-closed.
+    # Pentest-reported bypass: `rm ~root/.bashrc` was treated as a
+    # relative path `~root/.bashrc` and prepended with EFFECTIVE_CWD
+    # → in-project → ALLOWED.
+    p="/__tilde_other_user/${p#\~}"
   fi
   # Expand $HOME / ${HOME} but NOT when the `$` is backslash-escaped.
   # Bash treats `\$HOME` as literal "$HOME" — no parameter expansion runs —
