@@ -68,6 +68,43 @@ run_destructive_detectors() {
     fi
   fi
 
+  # --- shred: destructive overwrite (and optional unlink with -u) ---
+  # `shred` overwrites a file's bytes with random data; `shred -u`
+  # also unlinks. Same destruction semantics as rm/dd, so STRICT
+  # boundary (allowlist must not grant DESTROY-CONTENTS).
+  # Walker accepts -n N / -s N / --iterations / --size as flag+value
+  # pairs and consumes bare flags otherwise; remaining positionals are
+  # FILE operands. /usr/bin/shred and absolute-path forms also match.
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(/usr/bin/|/bin/)?shred($|[[:space:]])'; then
+    local shi=1 shn=${#CMD_TOKENS_SCAN[@]}
+    local shred_seen_dashdash=0
+    while [ $shi -lt $shn ]; do
+      local shtok
+      shtok=$(strip_quotes "${CMD_TOKENS_SCAN[$shi]}")
+      if [ $shred_seen_dashdash -eq 0 ]; then
+        case "$shtok" in
+          --)
+            shred_seen_dashdash=1; shi=$((shi + 1)); continue ;;
+          -n|-s|--iterations|--size|--random-source)
+            shi=$((shi + 2)); continue ;;
+          -*|'')
+            shi=$((shi + 1)); continue ;;
+        esac
+      fi
+      local shexp shresolved
+      shexp=$(expand_path "$shtok")
+      if [[ "$shexp" != /* ]]; then
+        shexp="$EFFECTIVE_CWD/$shexp"
+      fi
+      shresolved=$(resolve_path "$shexp")
+      if ! is_inside_project "$shresolved"; then
+        echo "BLOCKED: 'shred' targets '$shresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Destructive overwrite is only allowed within the project. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      shi=$((shi + 1))
+    done
+  fi
+
   # --- File deletion: allowed inside project, blocked outside ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])rm($|[[:space:]])'; then
     # Extract paths from rm command (skip flags)

@@ -964,3 +964,37 @@ expect_allowed "ruby -i inside project" \
   "ruby -i -pe '' $PROJECT/CHANGELOG.md"
 
 echo ""
+
+# ============================================================
+# 51. shred — destructive overwrite verb missing from walker list
+# ------------------------------------------------------------
+# `shred` overwrites a file's bytes with random data (and `shred -u`
+# also unlinks it). Same destruction semantics as `rm` + `dd of=`,
+# but it wasn't in destructive.sh's verb table. So `shred /etc/x`
+# and `shred -u /etc/x` slipped through.
+#
+# Fix: add a shred walker to destructive.sh — STRICT boundary
+# (is_inside_project, no allowlist; allowlist grants WRITE not
+# DESTROY-CONTENTS).
+# ============================================================
+echo "--- 51. shred destructive overwrite ---"
+
+expect_blocked "shred /etc/x" \
+  "shred /etc/passwd_test"
+expect_blocked "shred -u /etc/x" \
+  "shred -u /etc/passwd_test"
+expect_blocked "shred -n 5 /etc/x" \
+  "shred -n 5 /etc/passwd_test"
+expect_blocked "shred -uvz /etc/x" \
+  "shred -uvz /etc/passwd_test"
+expect_blocked "/usr/bin/shred /etc/x" \
+  "/usr/bin/shred /etc/passwd_test"
+
+# True-negatives: shred inside project must remain ALLOWED (refactoring
+# inside the project is the plugin's intended permission model).
+expect_allowed "shred inside project" \
+  "shred $PROJECT/tests/scratch.txt"
+expect_allowed "shred -u inside project" \
+  "shred -u $PROJECT/tests/scratch.txt"
+
+echo ""
