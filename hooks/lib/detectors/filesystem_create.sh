@@ -19,42 +19,25 @@ run_filesystem_create_detectors() {
   # uses the default temp dir (/tmp or $TMPDIR) and is left ALLOWED —
   # test harnesses (incl. helpers.sh) rely on the default form.
   if command_name_is "mktemp"; then
+    local mtdir
+    # -p / --tmpdir / --tmpdir=DIR — explicit destination flag.
+    while IFS= read -r mtdir; do
+      [ -n "$mtdir" ] && validate_command_path write "mktemp dir" "$mtdir"
+    done < <(extract_attached_or_split_from CMD_TOKENS_SCAN -p --tmpdir)
+    # Positional template with embedded path component:
+    # mktemp /etc/tmp.XXX writes into /etc. Validate the template's
+    # dirname (Codex r5 P1). The flag walker above ignores positionals;
+    # we re-walk here for the path-bearing template form.
     local mti=1 mtn=${#CMD_TOKENS_SCAN[@]}
     while [ $mti -lt $mtn ]; do
       local mttok
       mttok=$(strip_quotes "${CMD_TOKENS_SCAN[$mti]}")
-      local mtdir=""
       case "$mttok" in
-        -p)
-          if [ $((mti + 1)) -lt $mtn ]; then
-            mtdir=$(strip_quotes "${CMD_TOKENS_SCAN[$((mti + 1))]}")
-            mti=$((mti + 1))
-          fi
-          ;;
-        -p?*)
-          mtdir="${mttok#-p}"
-          ;;
-        --tmpdir)
-          if [ $((mti + 1)) -lt $mtn ]; then
-            local mtnext
-            mtnext=$(strip_quotes "${CMD_TOKENS_SCAN[$((mti + 1))]}")
-            case "$mtnext" in
-              -*) ;;
-              *) mtdir="$mtnext"; mti=$((mti + 1)) ;;
-            esac
-          fi
-          ;;
-        --tmpdir=*)
-          mtdir="${mttok#--tmpdir=}"
-          ;;
-        */*)
-          # Positional template with embedded path component:
-          # mktemp /etc/tmp.XXX writes into /etc. Validate the
-          # template's dirname (Codex r5 P1).
-          mtdir=$(dirname -- "$mttok")
-          ;;
+        -p|--tmpdir) mti=$((mti + 2)); continue ;;
+        -p?*|--tmpdir=*) mti=$((mti + 1)); continue ;;
+        -*) mti=$((mti + 1)); continue ;;
+        */*) validate_command_path write "mktemp dir" "$(dirname -- "$mttok")" ;;
       esac
-      [ -n "$mtdir" ] && validate_command_path write "mktemp dir" "$mtdir"
       mti=$((mti + 1))
     done
   fi
@@ -69,31 +52,17 @@ run_filesystem_create_detectors() {
   local SPECIAL_CMD
   for SPECIAL_CMD in mkfifo mknod; do
     if command_name_is "$SPECIAL_CMD"; then
-      local sci=1 scn=${#CMD_TOKENS_SCAN[@]}
-      local sc_seen_dashdash=0
-      while [ $sci -lt $scn ]; do
-        local sctok
-        sctok=$(strip_quotes "${CMD_TOKENS_SCAN[$sci]}")
-        if [ $sc_seen_dashdash -eq 0 ]; then
-          case "$sctok" in
-            --) sc_seen_dashdash=1; sci=$((sci + 1)); continue ;;
-            -m|--mode|-Z|--context) sci=$((sci + 2)); continue ;;
-            --mode=*|--context=*) sci=$((sci + 1)); continue ;;
-            -F)
-              # BSD `mknod -F FORMAT` (bsd / freebsd / linux / solaris).
-              # mkfifo has no -F — gate the pair-skip on the verb so
-              # mkfifo doesn't accidentally swallow a real positional.
-              if [ "$SPECIAL_CMD" = "mknod" ]; then
-                sci=$((sci + 2)); continue
-              fi ;;
-            -*|'') sci=$((sci + 1)); continue ;;
-          esac
-        fi
-        validate_command_path write "$SPECIAL_CMD" "$sctok"
+      # mknod adds `-F FORMAT` (BSD `mknod -F bsd|freebsd|linux|solaris`);
+      # mkfifo has no -F so we must NOT pair-skip it there.
+      local _sf="-m --mode -Z --context"
+      [ "$SPECIAL_CMD" = "mknod" ] && _sf="$_sf -F"
+      local _path
+      while IFS= read -r _path; do
+        [ -z "$_path" ] && continue
+        validate_command_path write "$SPECIAL_CMD" "$_path"
         # mknod has only one PATH positional; mkfifo accepts many.
         [ "$SPECIAL_CMD" = "mknod" ] && break
-        sci=$((sci + 1))
-      done
+      done < <(walk_path_operands_from CMD_TOKENS_SCAN "$_sf" "--mode --context")
     fi
   done
 }

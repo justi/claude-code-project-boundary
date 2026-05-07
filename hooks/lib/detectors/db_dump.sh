@@ -17,29 +17,12 @@ run_db_dump_detectors() {
   # Database dump tools accept an explicit output-file flag that
   # bypasses the redirect walker. Both write a SQL dump to FILE;
   # outside-project FILE is a boundary violation.
-  local PG_CMD
+  local PG_CMD pgfile
   for PG_CMD in pg_dump pg_dumpall; do
     if command_name_is "$PG_CMD"; then
-      local pgi=1 pgn=${#CMD_TOKENS_SCAN[@]}
-      while [ $pgi -lt $pgn ]; do
-        local pgtok
-        pgtok=$(strip_quotes "${CMD_TOKENS_SCAN[$pgi]}")
-        local pgfile=""
-        case "$pgtok" in
-          -f|--file)
-            if [ $((pgi + 1)) -lt $pgn ]; then
-              pgfile=$(strip_quotes "${CMD_TOKENS_SCAN[$((pgi + 1))]}")
-              pgi=$((pgi + 1))
-            fi
-            ;;
-          -f?*)
-            pgfile="${pgtok#-f}" ;;
-          --file=*)
-            pgfile="${pgtok#--file=}" ;;
-        esac
+      while IFS= read -r pgfile; do
         [ -n "$pgfile" ] && validate_command_path write "$PG_CMD -f" "$pgfile"
-        pgi=$((pgi + 1))
-      done
+      done < <(extract_attached_or_split_from CMD_TOKENS_SCAN -f --file)
     fi
   done
 
@@ -163,23 +146,9 @@ run_db_dump_detectors() {
     done
   fi
   if command_name_is "mysqldump"; then
-    local myi=1 myn=${#CMD_TOKENS_SCAN[@]}
-    while [ $myi -lt $myn ]; do
-      local mytok
-      mytok=$(strip_quotes "${CMD_TOKENS_SCAN[$myi]}")
-      local myfile=""
-      case "$mytok" in
-        -r|--result-file)
-          if [ $((myi + 1)) -lt $myn ]; then
-            myfile=$(strip_quotes "${CMD_TOKENS_SCAN[$((myi + 1))]}")
-            myi=$((myi + 1))
-          fi
-          ;;
-        --result-file=*)
-          myfile="${mytok#--result-file=}" ;;
-      esac
+    local myfile
+    while IFS= read -r myfile; do
       [ -n "$myfile" ] && validate_command_path write "mysqldump --result-file" "$myfile"
-      myi=$((myi + 1))
-    done
+    done < <(extract_attached_or_split_from CMD_TOKENS_SCAN -r --result-file)
   fi
 }
