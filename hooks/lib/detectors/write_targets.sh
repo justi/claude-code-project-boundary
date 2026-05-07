@@ -355,13 +355,22 @@ run_write_target_detectors() {
   # the existing in-project cwd, which is already bounded by the
   # project-boundary check on EFFECTIVE_CWD.
   if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(7z|7za|7zr|7zz)([[:space:]]|$)'; then
-    # Pass 1: -o<dir> attached form (any token starting with -o, len > 2).
+    # Pass 1: -o<dir> extraction destination — both attached
+    # (`-o<dir>`, no space) and split (`-o <dir>`, space) forms.
+    # 7-Zip docs mandate attached, but most builds also accept split,
+    # so fail-closed covers both.
     local zi=1 zn=${#CMD_TOKENS_SCAN[@]}
     while [ $zi -lt $zn ]; do
       local ztok
       ztok=$(strip_quotes "${CMD_TOKENS_SCAN[$zi]}")
+      local zdir=""
       if [[ "$ztok" == -o?* ]]; then
-        local zdir="${ztok#-o}"
+        zdir="${ztok#-o}"
+      elif [ "$ztok" = "-o" ] && [ $((zi + 1)) -lt $zn ]; then
+        zdir=$(strip_quotes "${CMD_TOKENS_SCAN[$((zi + 1))]}")
+        zi=$((zi + 1))
+      fi
+      if [ -n "$zdir" ]; then
         zdir=$(expand_path "$zdir")
         if [[ "$zdir" != /* ]]; then
           zdir="$EFFECTIVE_CWD/$zdir"
