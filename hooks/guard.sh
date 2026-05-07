@@ -727,6 +727,49 @@ check_single_command() {
     fi
   fi
 
+  # --- Block git worktree add <outside-path> ---
+  # `git worktree add <path>` creates a worktree directory at <path>
+  # — same boundary-violation pattern as `mkdir <outside>` (sec 52).
+  # Sec 53/60 only fired on `git -C` invocations + `worktree remove`,
+  # not on the `add` destination path argument. Codex round-3 review
+  # on PR #25 (sec 65).
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])git[[:space:]]+worktree[[:space:]]+add([[:space:]]|$)'; then
+    local _wi=0 _wn=${#CMD_TOKENS_SCAN[@]}
+    local _wt_seen=0
+    local _wt_skip_next=0
+    while [ $_wi -lt $_wn ]; do
+      local _wtok
+      _wtok=$(strip_quotes "${CMD_TOKENS_SCAN[$_wi]}")
+      if [ "$_wt_skip_next" -eq 1 ]; then
+        _wt_skip_next=0; _wi=$((_wi + 1)); continue
+      fi
+      if [ $_wt_seen -eq 0 ]; then
+        case "$_wtok" in
+          add) _wt_seen=1 ;;
+        esac
+        _wi=$((_wi + 1)); continue
+      fi
+      case "$_wtok" in
+        -b|-B|--reason)
+          _wt_skip_next=1; _wi=$((_wi + 1)); continue ;;
+        --*=*|-*)
+          _wi=$((_wi + 1)); continue ;;
+      esac
+      # First positional after `add` (and after consumed flags) = destination.
+      local _wt_exp _wt_resolved
+      _wt_exp=$(expand_path "$_wtok")
+      if [[ "$_wt_exp" != /* ]]; then
+        _wt_exp="$EFFECTIVE_CWD/$_wt_exp"
+      fi
+      _wt_resolved=$(resolve_path "$_wt_exp")
+      if ! is_inside_project "$_wt_resolved"; then
+        echo "BLOCKED: 'git worktree add' targets '$_wt_resolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      break
+    done
+  fi
+
   # --- Block nested shell execution (bash -c, sh -c, eval) ---
   # Match: bash -c, sh -c, bash -lc, bash -ec, /bin/bash -c, /bin/sh -c, /usr/bin/env bash -c
   # Also zsh / ksh / dash / fish (macOS ships zsh by default; all accept

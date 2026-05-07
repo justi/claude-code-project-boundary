@@ -1397,3 +1397,37 @@ expect_blocked "/usr/local/bin/osh -c destructive" \
   "/usr/local/bin/osh -c 'rm /etc/passwd_test'"
 
 echo ""
+
+# ============================================================
+# 65. git worktree add <outside> creates tree outside (P3, Codex r3)
+# ------------------------------------------------------------
+# `git worktree add <path>` creates a working tree directory at
+# <path> — same blast pattern as `mkdir <outside>` (sec 52). The
+# sec 53/60 walker only fired on `git -C` invocations and on
+# `worktree remove`, so `git worktree add /etc/foo` (no -C, just
+# a destination path argument) slipped through both.
+#
+# Fix: independent walker — when `git worktree add` is the verb,
+# walk arguments to find the destination path (first non-flag
+# token after `add`), validate via is_inside_project. Mirrors the
+# mkdir walker's STRICT semantics (creating outside-project
+# structure violates the boundary contract).
+# ============================================================
+echo "--- 65. git worktree add outside-project ---"
+
+expect_blocked "git worktree add /etc/foo" \
+  "git worktree add /etc/foo HEAD"
+expect_blocked "git worktree add /tmp/repo HEAD~1" \
+  "git worktree add /tmp/repo HEAD~1"
+expect_blocked "git worktree add ~root/foo" \
+  "git worktree add ~root/foo"
+expect_blocked "git worktree add -b new-branch /etc/foo" \
+  "git worktree add -b new-branch /etc/foo"
+
+# True-negatives: in-project + read-only.
+expect_allowed "git worktree add inside project" \
+  "git worktree add $PROJECT/tests/scratch_wt HEAD"
+expect_allowed "git worktree list (read-only)" \
+  "git worktree list"
+
+echo ""
