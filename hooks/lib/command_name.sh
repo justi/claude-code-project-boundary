@@ -10,11 +10,15 @@
 # command_name_is reads a CMD variable from its caller's dynamic
 # scope; other functions are pure.
 
-# --- Strip /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/ prefix ---
+# --- Strip /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/, ---
+# /opt/homebrew/bin/ prefix from a command-name token. The Homebrew
+# entry is required because Apple Silicon brews default to
+# /opt/homebrew/bin and command_name_is checks would otherwise miss
+# every Homebrew-installed binary (Codex round-5 P1).
 _cn_strip_path_prefix() {
   local n="$1"
   case "$n" in
-    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) printf '%s' "${n##*/}" ;;
+    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*|/opt/homebrew/bin/*) printf '%s' "${n##*/}" ;;
     *) printf '%s' "$n" ;;
   esac
 }
@@ -110,7 +114,7 @@ strip_command_name_prefix() {
   local first
   first=$(strip_quotes "${toks[$idx]}")
   case "$first" in
-    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) ;;
+    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*|/opt/homebrew/bin/*) ;;
     *) printf '%s' "$cmd"; return ;;
   esac
 
