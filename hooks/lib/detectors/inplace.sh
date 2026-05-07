@@ -199,4 +199,77 @@ run_inplace_detectors() {
       done
     fi
   fi
+
+  # --- awk -i inplace: gawk in-place edit (round-4 pentest) ---
+  # gawk's `-i inplace` (or `--include=inplace`) loads the inplace
+  # extension library and rewrites every FILE positional in place via
+  # temp-file + rename — same write semantics as `sed -i` / `perl -i`.
+  # Walker engages only when the inplace library is actually loaded;
+  # plain `awk PROG file` is read-only and stays ALLOWED.
+  #
+  # awk grammar:
+  #   awk [opts] 'PROG' file1 file2 ...        (positional PROG)
+  #   awk [opts] -f script.awk file1 ...       (no positional PROG)
+  #   awk [opts] -E script.awk file1 ...       (no positional PROG)
+  #   awk [opts] --source='PROG' file1 ...     (no positional PROG)
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(awk|gawk|mawk|nawk)([[:space:]]|$)'; then
+    local awk_inplace=0
+    local awk_explicit_prog=0
+    local awk_t=1 awk_n=${#CMD_TOKENS_SCAN[@]}
+    while [ $awk_t -lt $awk_n ]; do
+      local atok
+      atok=$(strip_quotes "${CMD_TOKENS_SCAN[$awk_t]}")
+      case "$atok" in
+        -i|--include)
+          if [ $((awk_t + 1)) -lt $awk_n ]; then
+            local libtok
+            libtok=$(strip_quotes "${CMD_TOKENS_SCAN[$((awk_t + 1))]}")
+            [ "$libtok" = "inplace" ] && awk_inplace=1
+          fi
+          ;;
+        -iinplace|--include=inplace|--inplace|--inplace=*)
+          awk_inplace=1 ;;
+        -f|-E|--file|--exec|--source)
+          awk_explicit_prog=1 ;;
+        --file=*|--exec=*|--source=*)
+          awk_explicit_prog=1 ;;
+      esac
+      awk_t=$((awk_t + 1))
+    done
+    if [ "$awk_inplace" -eq 1 ]; then
+      local awk_prog_skipped=0
+      local awk_seen_dashdash=0
+      local wi=1 wn=${#CMD_TOKENS_SCAN[@]}
+      while [ $wi -lt $wn ]; do
+        local wtok
+        wtok=$(strip_quotes "${CMD_TOKENS_SCAN[$wi]}")
+        if [ $awk_seen_dashdash -eq 0 ]; then
+          case "$wtok" in
+            --)
+              awk_seen_dashdash=1; wi=$((wi + 1)); continue ;;
+            -F|-v|-f|-i|-l|-E|--field-separator|--assign|--file|--include|--load|--exec|--source)
+              wi=$((wi + 2)); continue ;;
+            -*|'')
+              wi=$((wi + 1)); continue ;;
+          esac
+        fi
+        if [ "$awk_explicit_prog" -eq 0 ] && [ "$awk_prog_skipped" -eq 0 ]; then
+          awk_prog_skipped=1
+          wi=$((wi + 1)); continue
+        fi
+        local wexp
+        wexp=$(expand_path "$wtok")
+        if [[ "$wexp" != /* ]]; then
+          wexp="$EFFECTIVE_CWD/$wexp"
+        fi
+        local wresolved
+        wresolved=$(resolve_path "$wexp")
+        if ! is_write_permitted "$wresolved"; then
+          echo "BLOCKED: 'awk -i inplace' targets '$wresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+        wi=$((wi + 1))
+      done
+    fi
+  fi
 }

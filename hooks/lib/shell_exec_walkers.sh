@@ -39,6 +39,51 @@ block_nested_shell_and_eval() {
     echo "BLOCKED: 'eval' cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
   fi
+
+  # --- trap CMD SIG: deferred shell handler (round-4 pentest) ---
+  # `trap CMD SIG` registers CMD as a shell handler that fires on
+  # the named signal (EXIT, INT, TERM, ...). CMD is arbitrary shell
+  # code stored on argv and executed later — same un-inspectable
+  # semantics as `bash -c CMD` and `eval`. Read-only forms have no
+  # deferred CMD and stay ALLOWED:
+  #   trap            (list current traps)
+  #   trap -l         (list signal names)
+  #   trap -p         (print traps in re-input form)
+  #   trap - SIG      (reset SIG to default — first positional `-`)
+  #   trap '' SIG     (ignore SIG — first positional empty)
+  # command_name_is anchors to the verb position so `git commit -m
+  # "fix trap handling"` doesn't false-positive on the substring.
+  if command_name_is "trap"; then
+    local trap_i=1 trap_n=${#CMD_TOKENS_SCAN[@]}
+    local trap_seen_dashdash=0
+    local trap_readonly=0
+    local trap_first_pos=""
+    local trap_first_pos_set=0
+    while [ $trap_i -lt $trap_n ]; do
+      local trap_tok
+      trap_tok=$(strip_quotes "${CMD_TOKENS_SCAN[$trap_i]}")
+      if [ $trap_seen_dashdash -eq 0 ]; then
+        case "$trap_tok" in
+          --)
+            trap_seen_dashdash=1; trap_i=$((trap_i + 1)); continue ;;
+          -l|-p)
+            # `-l` / `-p` make the entire call read-only regardless
+            # of any signal-name args that may follow.
+            trap_readonly=1; break ;;
+        esac
+      fi
+      trap_first_pos="$trap_tok"
+      trap_first_pos_set=1
+      break
+    done
+    if [ "$trap_readonly" -eq 0 ] \
+       && [ "$trap_first_pos_set" -eq 1 ] \
+       && [ -n "$trap_first_pos" ] \
+       && [ "$trap_first_pos" != "-" ]; then
+      echo "BLOCKED: 'trap CMD SIG' deferred shell handler cannot be safely inspected. Ask user for explicit permission." >&2
+      exit 2
+    fi
+  fi
 }
 
 block_interpreter_inline_code() {
