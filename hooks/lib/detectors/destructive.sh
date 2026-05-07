@@ -286,10 +286,28 @@ run_permissions_detectors() {
       local perm_raw
       perm_raw=$(echo "$CMD" | grep -oE "(^|[[:space:]])${CMD_NAME}[[:space:]]+.*" | sed "s/^[[:space:]]*${CMD_NAME}[[:space:]]*//" || true)
       local skipped_first=0
+      local skip_next=0
+      local has_reference=0
+      # When `--reference` (any form) is present, the spec operand
+      # is supplied via the referenced file — there is NO positional
+      # spec. Skipping the first positional as spec would silently
+      # let the actual TARGET escape the boundary check (Codex r5 P1).
+      if echo "$perm_raw" | grep -qE '(^|[[:space:]])\-\-reference(=|[[:space:]]|$)'; then
+        has_reference=1
+      fi
 
       while IFS= read -r TARGET; do
-        [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
-        if [[ $skipped_first -eq 0 ]]; then
+        [[ -z "$TARGET" ]] && continue
+        if [[ $skip_next -eq 1 ]]; then
+          skip_next=0
+          continue
+        fi
+        case "$TARGET" in
+          --reference) skip_next=1; continue ;;
+          --reference=*) continue ;;
+          -*) continue ;;
+        esac
+        if [[ $skipped_first -eq 0 && $has_reference -eq 0 ]]; then
           skipped_first=1
           continue
         fi
