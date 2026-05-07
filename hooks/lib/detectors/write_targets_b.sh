@@ -234,9 +234,9 @@ run_write_target_detectors_b() {
           fi
           ;;
         -o?*)
-          pqkind="-o"; pqfile="${pqtok#-o}" ;;
+          pqkind="-o"; pqfile=$(strip_quotes "${pqtok#-o}") ;;
         --output=*)
-          pqkind="--output"; pqfile="${pqtok#--output=}" ;;
+          pqkind="--output"; pqfile=$(strip_quotes "${pqtok#--output=}") ;;
         -L|--log-file)
           pqkind="-L"
           if [ $((pqi + 1)) -lt $pqn ]; then
@@ -245,11 +245,20 @@ run_write_target_detectors_b() {
           fi
           ;;
         -L?*)
-          pqkind="-L"; pqfile="${pqtok#-L}" ;;
+          pqkind="-L"; pqfile=$(strip_quotes "${pqtok#-L}") ;;
         --log-file=*)
-          pqkind="--log-file"; pqfile="${pqtok#--log-file=}" ;;
+          pqkind="--log-file"; pqfile=$(strip_quotes "${pqtok#--log-file=}") ;;
       esac
-      [ -n "$pqfile" ] && validate_command_path write "psql $pqkind" "$pqfile"
+      if [ -n "$pqfile" ]; then
+        # Codex r5 round-3 P1: a value beginning with `|` is interpreted
+        # by psql as a pipe-to-shell-command, not a file path. Same
+        # un-inspectable surface as `bash -c` — fail-closed.
+        if [[ "$pqfile" == \|* ]]; then
+          echo "BLOCKED: 'psql $pqkind' pipe operand '$pqfile' executes a shell command and cannot be safely inspected. Ask user for explicit permission." >&2
+          exit 2
+        fi
+        validate_command_path write "psql $pqkind" "$pqfile"
+      fi
       pqi=$((pqi + 1))
     done
   fi
