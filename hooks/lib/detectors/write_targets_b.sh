@@ -329,6 +329,12 @@ run_write_target_detectors_b() {
         --tmpdir=*)
           mtdir="${mttok#--tmpdir=}"
           ;;
+        */*)
+          # Positional template with embedded path component:
+          # mktemp /etc/tmp.XXX writes into /etc. Validate the
+          # template's dirname (Codex r5 P1).
+          mtdir=$(dirname -- "$mttok")
+          ;;
       esac
       if [ -n "$mtdir" ]; then
         local mtexp mtres
