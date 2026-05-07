@@ -281,6 +281,8 @@ run_write_target_detectors_b() {
             pqi=$((pqi + 1))
           fi
           ;;
+        -o?*)
+          pqkind="-o"; pqfile="${pqtok#-o}" ;;
         --output=*)
           pqkind="--output"; pqfile="${pqtok#--output=}" ;;
         -L|--log-file)
@@ -290,6 +292,8 @@ run_write_target_detectors_b() {
             pqi=$((pqi + 1))
           fi
           ;;
+        -L?*)
+          pqkind="-L"; pqfile="${pqtok#-L}" ;;
         --log-file=*)
           pqkind="--log-file"; pqfile="${pqtok#--log-file=}" ;;
       esac
