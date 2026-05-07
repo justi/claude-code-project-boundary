@@ -731,7 +731,7 @@ check_single_command() {
   # Match: bash -c, sh -c, bash -lc, bash -ec, /bin/bash -c, /bin/sh -c, /usr/bin/env bash -c
   # Also zsh / ksh / dash / fish (macOS ships zsh by default; all accept
   # -c CMD with the same un-inspectable semantics).
-  if echo "$CMD" | grep -qE '(^|[[:space:]])(/usr/bin/env[[:space:]]+)?(/bin/)?(bash|sh|zsh|ksh|dash|fish|xonsh|tcsh|csh|nu|pwsh)[[:space:]]+-[a-zA-Z]*c[[:space:]]'; then
+  if echo "$CMD" | grep -qE '(^|[[:space:]])(/usr/bin/env[[:space:]]+)?(/bin/)?(bash|sh|zsh|ksh|dash|fish|xonsh|tcsh|csh|nu|pwsh|osh)[[:space:]]+-[a-zA-Z]*c[[:space:]]'; then
     echo "BLOCKED: Nested shell execution ('bash -c' / 'sh -c' / 'zsh -c' / ...) cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
   fi

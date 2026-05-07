@@ -1379,3 +1379,21 @@ expect_blocked "git -C / push --force-with-lease (still blocks)" \
   "git -C / push --force-with-lease"
 
 echo ""
+
+# ============================================================
+# 64. shell -c walker missed osh (P3, Codex r3)
+# ------------------------------------------------------------
+# Sec 49/58/61 covered bash/sh/zsh/ksh/dash/fish/xonsh/tcsh/csh/
+# nu/pwsh. Codex round-3 found `osh` (oils-for-unix POSIX shell)
+# still missing. osh is the Oil shell project's POSIX-compatible
+# entry point — accepts -c CMD just like bash.
+# Fix: add `osh` to the alternation + is_shell_token list.
+# ============================================================
+echo "--- 64. osh shell -c ---"
+
+expect_blocked "osh -c destructive" \
+  "osh -c 'rm /etc/passwd_test'"
+expect_blocked "/usr/local/bin/osh -c destructive" \
+  "/usr/local/bin/osh -c 'rm /etc/passwd_test'"
+
+echo ""
