@@ -339,4 +339,77 @@ run_write_target_detectors() {
     done < <(extract_option_values "-D" "" || true)
   fi
 
+  # --- 7z / 7za / 7zr / 7zz: -o<dir> extract dest + a/u/d/rn archive ---
+  # 7-Zip's spec mandates ATTACHED form `-o<dir>` (no space). The unzip
+  # walker uses extract_option_values which only matches separated
+  # `-o VAL` / `--output=VAL`, so the attached form slipped through
+  # entirely. Round-4 pentest discovered the gap.
+  #
+  # Two write paths to cover:
+  #   - extraction destination: any token of the form `-o<dir>`
+  #   - write-mode verbs: a (add), u (update), d (delete), rn (rename)
+  #     — the next non-flag positional after the verb is the ARCHIVE
+  #     and is created/rewritten in place.
+  #
+  # Read-only verbs (x/e w/o -o, l, t, b, h, i) write at most into
+  # the existing in-project cwd, which is already bounded by the
+  # project-boundary check on EFFECTIVE_CWD.
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(7z|7za|7zr|7zz)([[:space:]]|$)'; then
+    # Pass 1: -o<dir> attached form (any token starting with -o, len > 2).
+    local zi=1 zn=${#CMD_TOKENS_SCAN[@]}
+    while [ $zi -lt $zn ]; do
+      local ztok
+      ztok=$(strip_quotes "${CMD_TOKENS_SCAN[$zi]}")
+      if [[ "$ztok" == -o?* ]]; then
+        local zdir="${ztok#-o}"
+        zdir=$(expand_path "$zdir")
+        if [[ "$zdir" != /* ]]; then
+          zdir="$EFFECTIVE_CWD/$zdir"
+        fi
+        local zresolved
+        zresolved=$(resolve_path "$zdir")
+        if ! is_write_permitted "$zresolved"; then
+          echo "BLOCKED: '7z -o<dir>' targets '$zresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+      fi
+      zi=$((zi + 1))
+    done
+    # Pass 2: locate verb (first non-flag positional after binary) and,
+    # if it's a write-mode verb, validate the next positional as ARCHIVE.
+    local zci=1 zcmd=""
+    while [ $zci -lt $zn ]; do
+      local zct
+      zct=$(strip_quotes "${CMD_TOKENS_SCAN[$zci]}")
+      case "$zct" in
+        -*|'') zci=$((zci + 1)); continue ;;
+        *)     zcmd="$zct"; break ;;
+      esac
+    done
+    case "$zcmd" in
+      a|u|d|rn)
+        local zai=$((zci + 1))
+        while [ $zai -lt $zn ]; do
+          local zat
+          zat=$(strip_quotes "${CMD_TOKENS_SCAN[$zai]}")
+          case "$zat" in
+            -*|'') zai=$((zai + 1)); continue ;;
+          esac
+          local zaexp
+          zaexp=$(expand_path "$zat")
+          if [[ "$zaexp" != /* ]]; then
+            zaexp="$EFFECTIVE_CWD/$zaexp"
+          fi
+          local zaresolved
+          zaresolved=$(resolve_path "$zaexp")
+          if ! is_write_permitted "$zaresolved"; then
+            echo "BLOCKED: '7z $zcmd' archive '$zaresolved' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+            exit 2
+          fi
+          break
+        done
+        ;;
+    esac
+  fi
+
 }
