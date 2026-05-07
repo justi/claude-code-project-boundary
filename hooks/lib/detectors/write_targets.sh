@@ -384,6 +384,36 @@ run_write_target_detectors() {
       fi
       zi=$((zi + 1))
     done
+    # Pass 1b: -w<path> working-directory (Codex round-4 follow-up).
+    # `-w[<path>]` selects 7z's temp/work dir for intermediate files.
+    # An outside-project <path> is a real boundary violation (analogous
+    # to `-o<dir>`). Bare `-w` with no value uses the system default
+    # and is left ALLOWED. Both attached and split forms are covered.
+    local wzi=1
+    while [ $wzi -lt $zn ]; do
+      local wztok
+      wztok=$(strip_quotes "${CMD_TOKENS_SCAN[$wzi]}")
+      local wdir=""
+      if [[ "$wztok" == -w?* ]]; then
+        wdir="${wztok#-w}"
+      elif [ "$wztok" = "-w" ] && [ $((wzi + 1)) -lt $zn ]; then
+        wdir=$(strip_quotes "${CMD_TOKENS_SCAN[$((wzi + 1))]}")
+        wzi=$((wzi + 1))
+      fi
+      if [ -n "$wdir" ]; then
+        wdir=$(expand_path "$wdir")
+        if [[ "$wdir" != /* ]]; then
+          wdir="$EFFECTIVE_CWD/$wdir"
+        fi
+        local wresolved
+        wresolved=$(resolve_path "$wdir")
+        if ! is_write_permitted "$wresolved"; then
+          echo "BLOCKED: '7z -w<path>' targets '$wresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+      fi
+      wzi=$((wzi + 1))
+    done
     # Pass 2: locate verb (first non-flag positional after binary) and,
     # if it's a write-mode verb, validate the next positional as ARCHIVE.
     local zci=1 zcmd=""
