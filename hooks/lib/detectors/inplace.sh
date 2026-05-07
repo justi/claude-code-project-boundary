@@ -85,17 +85,7 @@ run_inplace_detectors() {
           script_skipped=1
           si=$((si + 1)); continue
         fi
-        local sexp
-        sexp=$(expand_path "$stok")
-        if [[ "$sexp" != /* ]]; then
-          sexp="$EFFECTIVE_CWD/$sexp"
-        fi
-        local sresolved
-        sresolved=$(resolve_path "$sexp")
-        if ! is_write_permitted "$sresolved"; then
-          echo "BLOCKED: 'sed -i' targets '$sresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
+        validate_command_path write "sed -i" "$stok"
         si=$((si + 1))
       done
     fi
@@ -129,17 +119,7 @@ run_inplace_detectors() {
       # The previous `^[+=<>%]?[0-9]` skip wrongly dropped digit-leading
       # filenames like `123.log` or `2024-04-22.log`, letting the target
       # escape the boundary check (Codex round — P2 bypass).
-      local trexp
-      trexp=$(expand_path "$trtok")
-      if [[ "$trexp" != /* ]]; then
-        trexp="$EFFECTIVE_CWD/$trexp"
-      fi
-      local trresolved
-      trresolved=$(resolve_path "$trexp")
-      if ! is_write_permitted "$trresolved"; then
-        echo "BLOCKED: 'truncate' targets '$trresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path write truncate "$trtok"
       tri=$((tri + 1))
     done
   fi
@@ -184,17 +164,7 @@ run_inplace_detectors() {
               pri=$((pri + 1)); continue ;;
           esac
         fi
-        local prexp
-        prexp=$(expand_path "$prtok")
-        if [[ "$prexp" != /* ]]; then
-          prexp="$EFFECTIVE_CWD/$prexp"
-        fi
-        local prresolved
-        prresolved=$(resolve_path "$prexp")
-        if ! is_write_permitted "$prresolved"; then
-          echo "BLOCKED: in-place edit ('perl -i' / 'ruby -i') targets '$prresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
+        validate_command_path write "perl -i / ruby -i" "$prtok"
         pri=$((pri + 1))
       done
     fi
@@ -257,17 +227,7 @@ run_inplace_detectors() {
           awk_prog_skipped=1
           wi=$((wi + 1)); continue
         fi
-        local wexp
-        wexp=$(expand_path "$wtok")
-        if [[ "$wexp" != /* ]]; then
-          wexp="$EFFECTIVE_CWD/$wexp"
-        fi
-        local wresolved
-        wresolved=$(resolve_path "$wexp")
-        if ! is_write_permitted "$wresolved"; then
-          echo "BLOCKED: 'awk -i inplace' targets '$wresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
+        validate_command_path write "awk -i inplace" "$wtok"
         wi=$((wi + 1))
       done
     fi
