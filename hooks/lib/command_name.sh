@@ -414,7 +414,7 @@ is_shell_token() {
   local _t="$1"
   local _base="${_t##*/}"
   case "$_base" in
-    bash|sh|zsh|ksh|dash|fish) return 0 ;;
+    bash|sh|zsh|ksh|dash|fish|xonsh|tcsh|csh|nu|pwsh|osh) return 0 ;;
   esac
   return 1
 }

@@ -4,3 +4,7 @@
 
 # Revive plugin cache (per-checkout; not portable).
 .revive/
+
+# Local pentest / Codex probe scratch dirs (not portable, not for history).
+.pentest_tmp/
+.codex_tmp/

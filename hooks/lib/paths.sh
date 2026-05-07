@@ -106,16 +106,39 @@ resolve_path() {
 # --- Expand ~ and $HOME in a command argument ---
 expand_path() {
   local p="$1"
+  # Detect quoted ~ BEFORE stripping quotes. Bash leaves a quoted
+  # tilde literal (`"~root"/.bashrc` is the literal path
+  # `~root/.bashrc`, not user root's home). Without this check
+  # the strip-then-match logic below would substitute the sentinel
+  # for a literal-name path and block legitimate in-project
+  # filenames containing `~`. Codex review of PR #25 (sec 59).
+  local _quoted_tilde=0
+  case "$p" in
+    \"~*|\'~*) _quoted_tilde=1 ;;
+  esac
   # Remove surrounding quotes (single or double)
   p="${p%\"}"
   p="${p#\"}"
   p="${p%\'}"
   p="${p#\'}"
-  # Expand ~ at start
-  if [[ "$p" == "~/"* ]]; then
-    p="$HOME/${p#\~/}"
-  elif [[ "$p" == "~" ]]; then
-    p="$HOME"
+  # Expand ~ at start (skipped entirely for quoted-tilde forms).
+  if [ $_quoted_tilde -eq 0 ]; then
+    if [[ "$p" == "~/"* ]]; then
+      p="$HOME/${p#\~/}"
+    elif [[ "$p" == "~" ]]; then
+      p="$HOME"
+    elif [[ "$p" =~ ^~[a-zA-Z_][a-zA-Z0-9_.-]* ]]; then
+      # `~user/path` — bash expands to the named user's home dir at
+      # exec time (e.g. `~root` → `/var/root` on macOS, `/root` on
+      # Linux). Without exec'ing getent/dscl/eval we can't safely
+      # resolve to the actual home, but the result is NEVER inside
+      # the project dir. Substitute a sentinel absolute path so
+      # is_inside_project / is_write_permitted naturally fail-closed.
+      # Pentest-reported bypass: `rm ~root/.bashrc` was treated as a
+      # relative path `~root/.bashrc` and prepended with EFFECTIVE_CWD
+      # → in-project → ALLOWED.
+      p="/__tilde_other_user/${p#\~}"
+    fi
   fi
   # Expand $HOME / ${HOME} but NOT when the `$` is backslash-escaped.
   # Bash treats `\$HOME` as literal "$HOME" — no parameter expansion runs —
