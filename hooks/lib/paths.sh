@@ -280,3 +280,51 @@ is_write_permitted() {
 is_discard_target() {
   [ "$1" = "/dev/null" ]
 }
+
+# --- DRY helpers for the detector cluster --------------------------
+#
+# Most walkers share the same path pipeline:
+#   raw → expand_path → (prepend EFFECTIVE_CWD if relative) → resolve_path
+# followed by an is_write_permitted / is_inside_project gate and a
+# canned BLOCKED stderr line + exit 2. These helpers fold the
+# boilerplate so a one-liner replaces ~10 lines per walker.
+
+# resolve_command_path RAW
+# Echoes the absolute, symlink-resolved path of RAW.
+# Reads EFFECTIVE_CWD from the caller's dynamic scope (same contract
+# as the detectors themselves).
+resolve_command_path() {
+  local p="$1"
+  p=$(expand_path "$p")
+  if [[ "$p" != /* ]]; then
+    p="$EFFECTIVE_CWD/$p"
+  fi
+  resolve_path "$p"
+}
+
+# block_unless_path_allowed POLICY LABEL RESOLVED_PATH
+#   POLICY = write   → is_write_permitted (allowlist applies)
+#   POLICY = strict  → is_inside_project (no allowlist exception)
+# On boundary violation: prints BLOCKED line to stderr and exit 2.
+# LABEL is the verb name + flag for the message (e.g. "tee",
+# "find -fprint", "7z -o<dir>").
+block_unless_path_allowed() {
+  local policy="$1" label="$2" path="$3"
+  case "$policy" in
+    write)
+      is_write_permitted "$path" && return 0 ;;
+    strict)
+      is_inside_project "$path" && return 0 ;;
+  esac
+  echo "BLOCKED: '$label' targets '$path' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+  exit 2
+}
+
+# validate_command_path POLICY LABEL RAW_PATH
+# Convenience wrapper: resolve + check in one call. Most call-sites
+# only need this single helper.
+validate_command_path() {
+  local resolved
+  resolved=$(resolve_command_path "$3")
+  block_unless_path_allowed "$1" "$2" "$resolved"
+}
