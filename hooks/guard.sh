@@ -45,6 +45,8 @@ source "$_GUARD_DIR/lib/detectors/inplace.sh"
 source "$_GUARD_DIR/lib/detectors/destructive.sh"
 # shellcheck source=lib/detectors/write_targets.sh
 source "$_GUARD_DIR/lib/detectors/write_targets.sh"
+# shellcheck source=lib/detectors/write_targets_b.sh
+source "$_GUARD_DIR/lib/detectors/write_targets_b.sh"
 # shellcheck source=lib/options.sh
 source "$_GUARD_DIR/lib/options.sh"
 # shellcheck source=lib/remote_dispatch.sh
@@ -442,6 +444,7 @@ check_single_command() {
   # install, rsync, tar, unzip, cpio, tee, curl, wget, dd, redirect
   # moved to hooks/lib/detectors/write_targets.sh.
   run_write_target_detectors
+  run_write_target_detectors_b
 
 
   # sed -i / truncate detectors moved to hooks/lib/detectors/inplace.sh.
