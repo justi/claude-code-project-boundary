@@ -327,25 +327,17 @@ check_single_command() {
   block_unexpanded_var
 
   # --- Tokenize the command once (quote-aware) for option/redirect parsing ---
+  # CMD_TOKENS_SCAN is the parallel token stream built from CMD_BLANKED.
+  # Used by detectors that walk tokens looking for a marker word (sed,
+  # truncate, `>`-redirect operator) and would otherwise pick up heredoc
+  # body bytes as if they were live commands. See the comment on
+  # CMD_BLANKED for why the source MUST be CMD_RAW (alias-escape would
+  # silently downgrade `<<\EOF` to its unquoted twin and re-leak body
+  # bytes).
   local -a CMD_TOKENS=()
-  while IFS= read -r tok; do
-    [[ -z "$tok" ]] && continue
-    CMD_TOKENS+=("$tok")
-  done < <(tokenize_args "$CMD")
-
-  # CMD_TOKENS_SCAN is the parallel token stream built from CMD_BLANKED
-  # (computed above near the top of check_single_command, alongside
-  # CMD_EXPAND_SCAN). Used by detectors that walk tokens looking for a
-  # marker word (sed, truncate, `>`-redirect operator) and would
-  # otherwise pick up heredoc body bytes as if they were live commands.
-  # See the comment on CMD_BLANKED for why the source MUST be CMD_RAW
-  # (alias-escape would silently downgrade `<<\EOF` to its unquoted
-  # twin and re-leak body bytes).
   local -a CMD_TOKENS_SCAN=()
-  while IFS= read -r tok; do
-    [[ -z "$tok" ]] && continue
-    CMD_TOKENS_SCAN+=("$tok")
-  done < <(tokenize_args "$CMD_BLANKED")
+  fill_tokens_from CMD_TOKENS "$CMD"
+  fill_tokens_from CMD_TOKENS_SCAN "$CMD_BLANKED"
 
   # --- Block command substitution outside single quotes ---
   block_command_substitution
@@ -385,16 +377,8 @@ check_single_command() {
   # view. Generic for the whole class — see hooks/lib/remote_dispatch.sh.
   CMD=$(rewrite_remote_dispatch "$CMD")
   CMD_BLANKED=$(rewrite_remote_dispatch "$CMD_BLANKED")
-  CMD_TOKENS=()
-  while IFS= read -r tok; do
-    [[ -z "$tok" ]] && continue
-    CMD_TOKENS+=("$tok")
-  done < <(tokenize_args "$CMD")
-  CMD_TOKENS_SCAN=()
-  while IFS= read -r tok; do
-    [[ -z "$tok" ]] && continue
-    CMD_TOKENS_SCAN+=("$tok")
-  done < <(tokenize_args "$CMD_BLANKED")
+  fill_tokens_from CMD_TOKENS "$CMD"
+  fill_tokens_from CMD_TOKENS_SCAN "$CMD_BLANKED"
 
   # --- Validate argument-as-command flag values recursively ---
   # Tools like `tar --to-command=<cmd>` / `rsync -e <cmd>` /
