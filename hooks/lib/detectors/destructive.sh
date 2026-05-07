@@ -68,14 +68,20 @@ run_destructive_detectors() {
     fi
   fi
 
-  # --- shred: destructive overwrite (and optional unlink with -u) ---
-  # `shred` overwrites a file's bytes with random data; `shred -u`
-  # also unlinks. Same destruction semantics as rm/dd, so STRICT
-  # boundary (allowlist must not grant DESTROY-CONTENTS).
+  # --- shred / wipe / srm / bcwipe: destructive overwrite (and ---
+  # optional unlink with -u). Same destruction semantics as rm/dd,
+  # so STRICT boundary (allowlist must not grant DESTROY-CONTENTS).
+  # `wipe` (Berke Durak), `srm` (Sourceforge secure-delete) and
+  # `bcwipe` (Jetico) are popular drop-in alternatives — round-5
+  # pentest found the trigger missed all three.
   # Walker accepts -n N / -s N / --iterations / --size as flag+value
-  # pairs and consumes bare flags otherwise; remaining positionals are
-  # FILE operands. /usr/bin/shred and absolute-path forms also match.
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(/usr/bin/|/bin/)?shred($|[[:space:]])'; then
+  # pairs and consumes bare flags otherwise; remaining positionals
+  # are FILE operands. /usr/bin/, /bin/, /usr/local/bin/, and
+  # /opt/homebrew/bin/ absolute-path forms also match.
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(/usr/bin/|/bin/|/usr/local/bin/|/opt/homebrew/bin/)?(shred|wipe|srm|bcwipe)($|[[:space:]])'; then
+    local destr_cmd
+    destr_cmd=$(echo "$CMD_BLANKED" | grep -oE '(shred|wipe|srm|bcwipe)' | head -1 || true)
+    [ -z "$destr_cmd" ] && destr_cmd="shred"
     local shi=1 shn=${#CMD_TOKENS_SCAN[@]}
     local shred_seen_dashdash=0
     while [ $shi -lt $shn ]; do
@@ -98,7 +104,7 @@ run_destructive_detectors() {
       fi
       shresolved=$(resolve_path "$shexp")
       if ! is_inside_project "$shresolved"; then
-        echo "BLOCKED: 'shred' targets '$shresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Destructive overwrite is only allowed within the project. Ask user for explicit permission." >&2
+        echo "BLOCKED: '$destr_cmd' targets '$shresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Destructive overwrite is only allowed within the project. Ask user for explicit permission." >&2
         exit 2
       fi
       shi=$((shi + 1))
