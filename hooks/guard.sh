@@ -47,8 +47,15 @@ source "$_GUARD_DIR/lib/detectors/destructive.sh"
 source "$_GUARD_DIR/lib/detectors/permissions.sh"
 # shellcheck source=lib/detectors/write_targets.sh
 source "$_GUARD_DIR/lib/detectors/write_targets.sh"
-# shellcheck source=lib/detectors/write_targets_b.sh
-source "$_GUARD_DIR/lib/detectors/write_targets_b.sh"
+# write_targets_b.sh was split by domain (Codex r5 finding #4).
+# shellcheck source=lib/detectors/download.sh
+source "$_GUARD_DIR/lib/detectors/download.sh"
+# shellcheck source=lib/detectors/redirects.sh
+source "$_GUARD_DIR/lib/detectors/redirects.sh"
+# shellcheck source=lib/detectors/db_dump.sh
+source "$_GUARD_DIR/lib/detectors/db_dump.sh"
+# shellcheck source=lib/detectors/filesystem_create.sh
+source "$_GUARD_DIR/lib/detectors/filesystem_create.sh"
 # shellcheck source=lib/options.sh
 source "$_GUARD_DIR/lib/options.sh"
 # shellcheck source=lib/remote_dispatch.sh
@@ -397,10 +404,17 @@ check_single_command() {
   run_destructive_detectors
 
 
-  # install, rsync, tar, unzip, cpio, tee, curl, wget, dd, redirect
-  # moved to hooks/lib/detectors/write_targets.sh.
+  # install, rsync, tar, unzip, cpio, archive: write_targets.sh.
+  # Domain splits of the former write_targets_b.sh:
+  #   download.sh           — curl -o / wget -O
+  #   redirects.sh          — tee, dd of=, `>` catch-all
+  #   db_dump.sh            — pg_dump -f, psql -o/-L/-c, mysql --tee, mysqldump
+  #   filesystem_create.sh  — mktemp -p, mkfifo, mknod
   run_write_target_detectors
-  run_write_target_detectors_b
+  run_download_detectors
+  run_redirect_detectors
+  run_db_dump_detectors
+  run_filesystem_create_detectors
 
 
   # sed -i / truncate detectors moved to hooks/lib/detectors/inplace.sh.
