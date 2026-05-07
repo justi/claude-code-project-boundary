@@ -154,7 +154,7 @@ run_write_target_detectors() {
   fi
 
   # --- rsync command: check all non-flag path arguments ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])rsync($|[[:space:]])'; then
+  if command_name_is "rsync"; then
     local rsync_raw
     rsync_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//' || true)
     # Track POSIX `--` end-of-options. After it, every token is a
@@ -224,7 +224,7 @@ run_write_target_detectors() {
   # --- tar: check every -C / --directory=PATH for extraction ---
   # tar allows multiple -C switches and the *last* one wins, so we must
   # validate every occurrence — not just the first.
-  if echo "$CMD" | grep -qE '(^|[[:space:]])tar($|[[:space:]])'; then
+  if command_name_is "tar"; then
     local ti=0 tn=${#CMD_TOKENS[@]}
     while [ $ti -lt $tn ]; do
       local ttok
@@ -249,7 +249,7 @@ run_write_target_detectors() {
   fi
 
   # --- unzip -d PATH ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])unzip($|[[:space:]])'; then
+  if command_name_is "unzip"; then
     local unzip_dir
     while IFS= read -r unzip_dir; do
       [ -z "$unzip_dir" ] && continue
@@ -258,7 +258,7 @@ run_write_target_detectors() {
   fi
 
   # --- cpio -D PATH ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])cpio($|[[:space:]])'; then
+  if command_name_is "cpio"; then
     local cpio_dir
     while IFS= read -r cpio_dir; do
       [ -z "$cpio_dir" ] && continue
@@ -281,7 +281,7 @@ run_write_target_detectors() {
   # Read-only verbs (x/e w/o -o, l, t, b, h, i) write at most into
   # the existing in-project cwd, which is already bounded by the
   # project-boundary check on EFFECTIVE_CWD.
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(7z|7za|7zr|7zz|7zzs)([[:space:]]|$)'; then
+  if command_name_matches "7z|7za|7zr|7zz|7zzs"; then
     # Pass 1: -o<dir> extraction destination — both attached
     # (`-o<dir>`, no space) and split (`-o <dir>`, space) forms.
     # 7-Zip docs mandate attached, but most builds also accept split,

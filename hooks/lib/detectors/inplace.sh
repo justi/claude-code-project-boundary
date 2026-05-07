@@ -21,7 +21,7 @@ run_inplace_detectors() {
   # alone. We only engage when -i / --in-place is actually present.
   # Use the heredoc-blanked view here: a commit-message body that
   # mentions "sed -i" must not be parsed as a real sed call.
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])sed($|[[:space:]])'; then
+  if command_name_is "sed"; then
     local sed_has_i=0
     local raw_tok
     for raw_tok in "${CMD_TOKENS_SCAN[@]}"; do
@@ -94,7 +94,7 @@ run_inplace_detectors() {
   # --- truncate: always rewrites the target file(s) ---
   # Heredoc-blanked view as above — body bytes mentioning "truncate" are
   # not a real call.
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])truncate($|[[:space:]])'; then
+  if command_name_is "truncate"; then
     local tri=1 trn=${#CMD_TOKENS_SCAN[@]}
     local trunc_seen_dashdash=0
     while [ $tri -lt $trn ]; do
@@ -137,7 +137,7 @@ run_inplace_detectors() {
   # is present, then walks every positional after consuming flag/value
   # pairs (`-e CODE`, `-E CODE`, `-M MOD`, `--`). Mirrors the sed -i
   # walker's POSIX `--` handling.
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(perl|ruby)([[:space:]]|$)'; then
+  if command_name_matches "perl|ruby"; then
     local pr_has_inplace=0
     local pr_tok
     for pr_tok in "${CMD_TOKENS_SCAN[@]}"; do
@@ -182,7 +182,7 @@ run_inplace_detectors() {
   #   awk [opts] -f script.awk file1 ...       (no positional PROG)
   #   awk [opts] -E script.awk file1 ...       (no positional PROG)
   #   awk [opts] --source='PROG' file1 ...     (no positional PROG)
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(awk|gawk|mawk|nawk)([[:space:]]|$)'; then
+  if command_name_matches "awk|gawk|mawk|nawk"; then
     local awk_inplace=0
     local awk_explicit_prog=0
     local awk_t=1 awk_n=${#CMD_TOKENS_SCAN[@]}

@@ -14,6 +14,11 @@ run_write_target_detectors_b() {
   local TARGET RESOLVED
 
   # --- tee command: extract file arguments, block if outside project ---
+  # NOTE: kept as raw substring regex (NOT command_name_is) by design.
+  # `docker run --rm -v /tmp:/data alpine tee /data/x.md` deliberately
+  # over-blocks because host-mount parsing is not in scope. Substring
+  # is the intended fail-closed surface — same reasoning as the rm
+  # walker note in destructive.sh.
   if echo "$CMD" | grep -qE '(^|[[:space:]])tee($|[[:space:]])'; then
     local tee_raw
     tee_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])tee[[:space:]]+.*' | sed 's/^[[:space:]]*tee[[:space:]]*//' || true)
@@ -30,7 +35,7 @@ run_write_target_detectors_b() {
   # --- curl -o / curl --output outside project ---
   # curl -o is positional: `curl -o out1 URL1 -o out2 URL2` writes each URL
   # to its corresponding output. Validate EVERY occurrence.
-  if echo "$CMD" | grep -qE '(^|[[:space:]])curl($|[[:space:]])'; then
+  if command_name_is "curl"; then
     local curl_output resolved_curl
     while IFS= read -r curl_output; do
       [ -z "$curl_output" ] && continue
@@ -42,7 +47,7 @@ run_write_target_detectors_b() {
   fi
 
   # --- wget -O / wget --output-document outside project ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])wget($|[[:space:]])'; then
+  if command_name_is "wget"; then
     local wget_output
     while IFS= read -r wget_output; do
       [ -z "$wget_output" ] && continue
@@ -57,7 +62,7 @@ run_write_target_detectors_b() {
   # --- dd of= outside project ---
   # dd accepts repeated key=value operands and the last one wins, so we must
   # validate every of= occurrence — not just the first.
-  if echo "$CMD" | grep -qE '(^|[[:space:]])dd($|[[:space:]])'; then
+  if command_name_is "dd"; then
     local raw_tok
     for raw_tok in "${CMD_TOKENS[@]}"; do
       local tok
