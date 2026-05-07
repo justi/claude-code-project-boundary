@@ -366,6 +366,13 @@ run_write_target_detectors_b() {
             --) sc_seen_dashdash=1; sci=$((sci + 1)); continue ;;
             -m|--mode|-Z|--context) sci=$((sci + 2)); continue ;;
             --mode=*|--context=*) sci=$((sci + 1)); continue ;;
+            -F)
+              # BSD `mknod -F FORMAT` (bsd / freebsd / linux / solaris).
+              # mkfifo has no -F — gate the pair-skip on the verb so
+              # mkfifo doesn't accidentally swallow a real positional.
+              if [ "$SPECIAL_CMD" = "mknod" ]; then
+                sci=$((sci + 2)); continue
+              fi ;;
             -*|'') sci=$((sci + 1)); continue ;;
           esac
         fi
