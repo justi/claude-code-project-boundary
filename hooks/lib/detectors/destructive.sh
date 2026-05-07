@@ -406,4 +406,126 @@ run_permissions_detectors() {
       cfi=$((cfi + 1))
     done
   fi
+
+  # --- setcap: Linux capabilities (round-5 P3) ---
+  # `setcap CAP_SPEC FILE` grants capabilities (cap_net_bind_service,
+  # cap_sys_admin, ...) on FILE — privilege escalation primitive.
+  # `setcap -r FILE` removes all caps. STRICT.
+  # Bare flags: -q (quiet), -v (verify), -h (help), -n (no rootid),
+  # -e (existing cap), -f (cap from file). `-r` is the remove
+  # subcommand and changes positional shape (no spec operand).
+  if command_name_is "setcap"; then
+    local sci=1 scn=${#CMD_TOKENS_SCAN[@]}
+    local sc_seen_dashdash=0
+    local sc_remove=0
+    local sc_skipped_spec=0
+    # Pre-scan for -r (remove): no CAP_SPEC positional in that shape.
+    local _i
+    for ((_i=1; _i<scn; _i++)); do
+      case "$(strip_quotes "${CMD_TOKENS_SCAN[$_i]}")" in
+        -r|--remove) sc_remove=1; break ;;
+      esac
+    done
+    while [ $sci -lt $scn ]; do
+      local sctok
+      sctok=$(strip_quotes "${CMD_TOKENS_SCAN[$sci]}")
+      if [ $sc_seen_dashdash -eq 0 ]; then
+        case "$sctok" in
+          --) sc_seen_dashdash=1; sci=$((sci + 1)); continue ;;
+          -*|'') sci=$((sci + 1)); continue ;;
+        esac
+      fi
+      if [ $sc_remove -eq 0 ] && [ $sc_skipped_spec -eq 0 ]; then
+        sc_skipped_spec=1; sci=$((sci + 1)); continue
+      fi
+      local scexp scres
+      scexp=$(expand_path "$sctok")
+      if [[ "$scexp" != /* ]]; then
+        scexp="$EFFECTIVE_CWD/$scexp"
+      fi
+      scres=$(resolve_path "$scexp")
+      if ! is_inside_project "$scres"; then
+        echo "BLOCKED: 'setcap' targets '$scres' which is OUTSIDE project directory. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      sci=$((sci + 1))
+    done
+  fi
+
+  # --- chattr: Linux ext file attributes (round-5 P3) ---
+  # `chattr +i FILE` makes immutable; `+a` append-only; etc. Same
+  # weaponize-permissions threat as chmod. STRICT.
+  # Value-bearing pairs: -v VERSION (set version), -p PROJECT (project ID).
+  # Bare flags: -R (recursive), -V (verbose), -f (no errors), -h (help).
+  # First non-flag positional is MODE_SPEC (`+i`, `-a`, `=AS`); skip it.
+  if command_name_is "chattr"; then
+    local cai=1 can=${#CMD_TOKENS_SCAN[@]}
+    local ca_seen_dashdash=0
+    local ca_skipped_spec=0
+    while [ $cai -lt $can ]; do
+      local catok
+      catok=$(strip_quotes "${CMD_TOKENS_SCAN[$cai]}")
+      if [ $ca_seen_dashdash -eq 0 ]; then
+        case "$catok" in
+          --) ca_seen_dashdash=1; cai=$((cai + 1)); continue ;;
+          -v|-p) cai=$((cai + 2)); continue ;;
+          -*|'') cai=$((cai + 1)); continue ;;
+        esac
+      fi
+      if [ $ca_skipped_spec -eq 0 ]; then
+        ca_skipped_spec=1; cai=$((cai + 1)); continue
+      fi
+      local caexp cares
+      caexp=$(expand_path "$catok")
+      if [[ "$caexp" != /* ]]; then
+        caexp="$EFFECTIVE_CWD/$caexp"
+      fi
+      cares=$(resolve_path "$caexp")
+      if ! is_inside_project "$cares"; then
+        echo "BLOCKED: 'chattr' targets '$cares' which is OUTSIDE project directory. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      cai=$((cai + 1))
+    done
+  fi
+
+  # --- attr: alternative xattr setter (round-5 P3) ---
+  # `attr -s NAME -V VALUE FILE` sets, `attr -r NAME FILE` removes.
+  # Read actions (`-g`, `-l`) stay ALLOWED — gate the walker on
+  # presence of `-s` / `-r` in the token list.
+  if command_name_is "attr"; then
+    local atr_write=0
+    local _j
+    for ((_j=1; _j<${#CMD_TOKENS_SCAN[@]}; _j++)); do
+      case "$(strip_quotes "${CMD_TOKENS_SCAN[$_j]}")" in
+        -s|-r) atr_write=1; break ;;
+      esac
+    done
+    if [ $atr_write -eq 1 ]; then
+      local atri=1 atrn=${#CMD_TOKENS_SCAN[@]}
+      local atr_seen_dashdash=0
+      while [ $atri -lt $atrn ]; do
+        local atrtok
+        atrtok=$(strip_quotes "${CMD_TOKENS_SCAN[$atri]}")
+        if [ $atr_seen_dashdash -eq 0 ]; then
+          case "$atrtok" in
+            --) atr_seen_dashdash=1; atri=$((atri + 1)); continue ;;
+            -s|-V|-r|-g) atri=$((atri + 2)); continue ;;
+            -*|'') atri=$((atri + 1)); continue ;;
+          esac
+        fi
+        local atrexp atrres
+        atrexp=$(expand_path "$atrtok")
+        if [[ "$atrexp" != /* ]]; then
+          atrexp="$EFFECTIVE_CWD/$atrexp"
+        fi
+        atrres=$(resolve_path "$atrexp")
+        if ! is_inside_project "$atrres"; then
+          echo "BLOCKED: 'attr' targets '$atrres' which is OUTSIDE project directory. Ask user for explicit permission." >&2
+          exit 2
+        fi
+        atri=$((atri + 1))
+      done
+    fi
+  fi
 }
