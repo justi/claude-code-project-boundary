@@ -134,11 +134,14 @@ _rd_find_verb_idx() {
   printf -- '-1'
 }
 
-# --- Strip a /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/ prefix ---
+# --- Strip /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/, ---
+# /opt/homebrew/bin/ prefix. Mirrors _cn_strip_path_prefix in
+# command_name.sh — kept in sync so a Homebrew-installed ssh /
+# kubectl / etc. is recognised by the remote-dispatch walkers.
 _rd_strip_path_prefix() {
   local n="$1"
   case "$n" in
-    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) printf '%s' "${n##*/}" ;;
+    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*|/opt/homebrew/bin/*) printf '%s' "${n##*/}" ;;
     *) printf '%s' "$n" ;;
   esac
 }

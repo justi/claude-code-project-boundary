@@ -116,11 +116,15 @@ _sf_find_verb_idx() {
   printf -- '-1'
 }
 
-# --- Strip /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/ prefix ---
+# --- Strip /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/, ---
+# /opt/homebrew/bin/ prefix from a command-name token. Mirrors
+# _cn_strip_path_prefix in command_name.sh — kept in sync so a
+# Homebrew-installed tar / git / etc. is recognised by the
+# subcommand sink walkers in this module too.
 _sf_strip_path_prefix() {
   local n="$1"
   case "$n" in
-    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*) printf '%s' "${n##*/}" ;;
+    /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*|/opt/homebrew/bin/*) printf '%s' "${n##*/}" ;;
     *) printf '%s' "$n" ;;
   esac
 }
