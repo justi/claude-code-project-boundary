@@ -227,6 +227,58 @@ run_write_target_detectors_b() {
     fi
   done
 
+  # --- mktemp -p<dir> / --tmpdir=<dir>: temp file/dir creation ---
+  # `mktemp -p DIR TEMPLATE` and `mktemp --tmpdir=DIR TEMPLATE`
+  # create a temp file or directory inside DIR. Outside-project DIR
+  # is a write outside the boundary. Bare `mktemp` (no -p / --tmpdir)
+  # uses the default temp dir (/tmp or $TMPDIR) and is left ALLOWED —
+  # test harnesses (incl. helpers.sh) rely on the default form.
+  if command_name_is "mktemp"; then
+    local mti=1 mtn=${#CMD_TOKENS_SCAN[@]}
+    while [ $mti -lt $mtn ]; do
+      local mttok
+      mttok=$(strip_quotes "${CMD_TOKENS_SCAN[$mti]}")
+      local mtdir=""
+      case "$mttok" in
+        -p)
+          if [ $((mti + 1)) -lt $mtn ]; then
+            mtdir=$(strip_quotes "${CMD_TOKENS_SCAN[$((mti + 1))]}")
+            mti=$((mti + 1))
+          fi
+          ;;
+        -p?*)
+          mtdir="${mttok#-p}"
+          ;;
+        --tmpdir)
+          if [ $((mti + 1)) -lt $mtn ]; then
+            local mtnext
+            mtnext=$(strip_quotes "${CMD_TOKENS_SCAN[$((mti + 1))]}")
+            case "$mtnext" in
+              -*) ;;
+              *) mtdir="$mtnext"; mti=$((mti + 1)) ;;
+            esac
+          fi
+          ;;
+        --tmpdir=*)
+          mtdir="${mttok#--tmpdir=}"
+          ;;
+      esac
+      if [ -n "$mtdir" ]; then
+        local mtexp mtres
+        mtexp=$(expand_path "$mtdir")
+        if [[ "$mtexp" != /* ]]; then
+          mtexp="$EFFECTIVE_CWD/$mtexp"
+        fi
+        mtres=$(resolve_path "$mtexp")
+        if ! is_write_permitted "$mtres"; then
+          echo "BLOCKED: 'mktemp' targets dir '$mtres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+      fi
+      mti=$((mti + 1))
+    done
+  fi
+
   # --- mkfifo / mknod: create special filesystem entry (round-5) ---
   # `mkfifo PATH...` creates a named pipe at each PATH; `mknod PATH
   # TYPE MAJOR MINOR` creates a device node at PATH (only the first
