@@ -111,10 +111,19 @@ run_destructive_detectors() {
   # pairs and consumes bare flags otherwise; remaining positionals
   # are FILE operands. /usr/bin/, /bin/, /usr/local/bin/, and
   # /opt/homebrew/bin/ absolute-path forms also match.
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(/usr/bin/|/bin/|/usr/local/bin/|/opt/homebrew/bin/)?(shred|wipe|srm|bcwipe)($|[[:space:]])'; then
-    local destr_cmd
-    destr_cmd=$(echo "$CMD_BLANKED" | grep -oE '(shred|wipe|srm|bcwipe)' | head -1 || true)
-    [ -z "$destr_cmd" ] && destr_cmd="shred"
+  # Anchor on command_name_is so substrings ("echo wipe", "npm run
+  # wipe", "printf 'srm: %s'") don't false-positive on the trigger
+  # (Codex round-5 P2). _cn_strip_path_prefix already normalises
+  # /opt/homebrew/bin/ etc. so absolute-path forms still match.
+  local destr_cmd=""
+  local _DC
+  for _DC in shred wipe srm bcwipe; do
+    if command_name_is "$_DC"; then
+      destr_cmd="$_DC"
+      break
+    fi
+  done
+  if [ -n "$destr_cmd" ]; then
     local shi=1 shn=${#CMD_TOKENS_SCAN[@]}
     local shred_seen_dashdash=0
     while [ $shi -lt $shn ]; do
