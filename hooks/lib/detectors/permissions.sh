@@ -202,6 +202,14 @@ run_permissions_detectors() {
         case "$catok" in
           --) ca_seen_dashdash=1; cai=$((cai + 1)); continue ;;
           -v|-p) cai=$((cai + 2)); continue ;;
+          -R|-V|-f|-h) cai=$((cai + 1)); continue ;;
+          [+=]*|-[a-zA-Z]*)
+            # Mode spec — `+i`, `-i`, `=AS`, multi-letter combos.
+            # Codex round-5b P1: previously these matched the `-*`
+            # branch and were skipped as flags, leaving the FILE
+            # to be eaten by the spec-skip and never validated.
+            ca_skipped_spec=1
+            cai=$((cai + 1)); continue ;;
           -*|'') cai=$((cai + 1)); continue ;;
         esac
       fi
