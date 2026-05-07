@@ -226,4 +226,44 @@ run_write_target_detectors_b() {
       fi
     fi
   done
+
+  # --- mkfifo / mknod: create special filesystem entry (round-5) ---
+  # `mkfifo PATH...` creates a named pipe at each PATH; `mknod PATH
+  # TYPE MAJOR MINOR` creates a device node at PATH (only the first
+  # positional is a path — the rest are spec). Outside-project PATH
+  # is a real boundary violation, but no walker covered it.
+  # Value-bearing flags: -m / --mode (and `--mode=...`), -Z /
+  # --context (SELinux on GNU). is_write_permitted (allowlist OK).
+  local SPECIAL_CMD
+  for SPECIAL_CMD in mkfifo mknod; do
+    if command_name_is "$SPECIAL_CMD"; then
+      local sci=1 scn=${#CMD_TOKENS_SCAN[@]}
+      local sc_seen_dashdash=0
+      while [ $sci -lt $scn ]; do
+        local sctok
+        sctok=$(strip_quotes "${CMD_TOKENS_SCAN[$sci]}")
+        if [ $sc_seen_dashdash -eq 0 ]; then
+          case "$sctok" in
+            --) sc_seen_dashdash=1; sci=$((sci + 1)); continue ;;
+            -m|--mode|-Z|--context) sci=$((sci + 2)); continue ;;
+            --mode=*|--context=*) sci=$((sci + 1)); continue ;;
+            -*|'') sci=$((sci + 1)); continue ;;
+          esac
+        fi
+        local scexp scresolved
+        scexp=$(expand_path "$sctok")
+        if [[ "$scexp" != /* ]]; then
+          scexp="$EFFECTIVE_CWD/$scexp"
+        fi
+        scresolved=$(resolve_path "$scexp")
+        if ! is_write_permitted "$scresolved"; then
+          echo "BLOCKED: '$SPECIAL_CMD' targets '$scresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+        # mknod has only one PATH positional; mkfifo accepts many.
+        [ "$SPECIAL_CMD" = "mknod" ] && break
+        sci=$((sci + 1))
+      done
+    fi
+  done
 }
