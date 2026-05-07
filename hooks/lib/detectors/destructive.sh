@@ -30,7 +30,7 @@ run_destructive_detectors() {
 
   # --- find with -delete or -exec rm/mv outside project ---
   if echo "$CMD" | grep -qE '(^|[[:space:]])find($|[[:space:]])'; then
-    if echo "$CMD" | grep -qE '(-delete|-exec[[:space:]]+(rm|mv))'; then
+    if echo "$CMD" | grep -qE '(-delete|-(exec|ok|okdir)[[:space:]]+(rm|mv))'; then
       # Extract ALL find paths (non-option arguments after 'find')
       # Skip options like -L, -H, -P that come before the paths
       local -a find_paths=()
