@@ -20,18 +20,10 @@ run_write_target_detectors_b() {
 
     while IFS= read -r TARGET; do
       [[ -z "$TARGET" || "$TARGET" == -* ]] && continue
-      TARGET=$(expand_path "$TARGET")
-      if [[ "$TARGET" != /* ]]; then
-        TARGET="$EFFECTIVE_CWD/$TARGET"
-      fi
-      RESOLVED=$(resolve_path "$TARGET")
-
+      RESOLVED=$(resolve_command_path "$TARGET")
       # /dev/null is a discard sink for tee (`echo x | tee /dev/null`).
       is_discard_target "$RESOLVED" && continue
-      if ! is_write_permitted "$RESOLVED"; then
-        echo "BLOCKED: 'tee' targets '$RESOLVED' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      block_unless_path_allowed write tee "$RESOLVED"
     done < <(tokenize_args "$tee_raw")
   fi
 
@@ -39,21 +31,13 @@ run_write_target_detectors_b() {
   # curl -o is positional: `curl -o out1 URL1 -o out2 URL2` writes each URL
   # to its corresponding output. Validate EVERY occurrence.
   if echo "$CMD" | grep -qE '(^|[[:space:]])curl($|[[:space:]])'; then
-    local curl_output
+    local curl_output resolved_curl
     while IFS= read -r curl_output; do
       [ -z "$curl_output" ] && continue
-      curl_output=$(expand_path "$curl_output")
-      if [[ "$curl_output" != /* ]]; then
-        curl_output="$EFFECTIVE_CWD/$curl_output"
-      fi
-      local resolved_curl
-      resolved_curl=$(resolve_path "$curl_output")
+      resolved_curl=$(resolve_command_path "$curl_output")
       # /dev/null is a discard sink for HTTP probes (`curl -o /dev/null -w %{http_code}`).
       is_discard_target "$resolved_curl" && continue
-      if ! is_write_permitted "$resolved_curl"; then
-        echo "BLOCKED: 'curl' output file '$resolved_curl' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      block_unless_path_allowed write "curl output file" "$resolved_curl"
     done < <(extract_option_values "-o" "--output" || true)
   fi
 
@@ -62,18 +46,11 @@ run_write_target_detectors_b() {
     local wget_output
     while IFS= read -r wget_output; do
       [ -z "$wget_output" ] && continue
-      wget_output=$(expand_path "$wget_output")
-      if [[ "$wget_output" != /* ]]; then
-        wget_output="$EFFECTIVE_CWD/$wget_output"
-      fi
       local resolved_wget
-      resolved_wget=$(resolve_path "$wget_output")
+      resolved_wget=$(resolve_command_path "$wget_output")
       # /dev/null is a discard sink (`wget -O /dev/null URL`).
       is_discard_target "$resolved_wget" && continue
-      if ! is_write_permitted "$resolved_wget"; then
-        echo "BLOCKED: 'wget' output file '$resolved_wget' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      block_unless_path_allowed write "wget output file" "$resolved_wget"
     done < <(extract_option_values "-O" "--output-document" || true)
   fi
 
@@ -88,19 +65,11 @@ run_write_target_detectors_b() {
       if [[ "$tok" == of=* ]]; then
         local dd_output="${tok#of=}"
         if [ -n "$dd_output" ]; then
-          dd_output=$(expand_path "$dd_output")
-          if [[ "$dd_output" != /* ]]; then
-            dd_output="$EFFECTIVE_CWD/$dd_output"
-          fi
           local resolved_dd
-          resolved_dd=$(resolve_path "$dd_output")
+          resolved_dd=$(resolve_command_path "$dd_output")
           # /dev/null is a discard sink (`dd if=x of=/dev/null`).
-          if ! is_discard_target "$resolved_dd"; then
-            if ! is_write_permitted "$resolved_dd"; then
-              echo "BLOCKED: 'dd' output '$resolved_dd' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-              exit 2
-            fi
-          fi
+          is_discard_target "$resolved_dd" && continue
+          block_unless_path_allowed write "dd output" "$resolved_dd"
         fi
       fi
     done
@@ -192,12 +161,8 @@ run_write_target_detectors_b() {
         echo "BLOCKED: Process substitution redirect '$REDIR_TARGET' cannot be safely inspected. Ask user for explicit permission." >&2
         exit 2
       fi
-      REDIR_TARGET=$(expand_path "$REDIR_TARGET")
-      if [[ "$REDIR_TARGET" != /* ]]; then
-        REDIR_TARGET="$EFFECTIVE_CWD/$REDIR_TARGET"
-      fi
       local resolved_redir
-      resolved_redir=$(resolve_path "$REDIR_TARGET")
+      resolved_redir=$(resolve_command_path "$REDIR_TARGET")
       # Follow symlinks so that `echo x > project/link` where
       # `link -> /etc/passwd` is caught. resolve_path only canonicalizes
       # the dirname, not the basename — a symlink leaf slips through.
@@ -218,12 +183,8 @@ run_write_target_detectors_b() {
       fi
       # /dev/null is a discard sink for every redirect form
       # (`> /dev/null`, `2> /dev/null`, `&> /dev/null`, `2>&1 > /dev/null`).
-      if ! is_discard_target "$resolved_redir"; then
-        if ! is_write_permitted "$resolved_redir"; then
-          echo "BLOCKED: Redirect target '$resolved_redir' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      fi
+      is_discard_target "$resolved_redir" || \
+        block_unless_path_allowed write "Redirect target" "$resolved_redir"
     fi
   done
 
@@ -251,18 +212,7 @@ run_write_target_detectors_b() {
           --file=*)
             pgfile="${pgtok#--file=}" ;;
         esac
-        if [ -n "$pgfile" ]; then
-          local pgexp pgres
-          pgexp=$(expand_path "$pgfile")
-          if [[ "$pgexp" != /* ]]; then
-            pgexp="$EFFECTIVE_CWD/$pgexp"
-          fi
-          pgres=$(resolve_path "$pgexp")
-          if ! is_write_permitted "$pgres"; then
-            echo "BLOCKED: '$PG_CMD -f' targets '$pgres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-            exit 2
-          fi
-        fi
+        [ -n "$pgfile" ] && validate_command_path write "$PG_CMD -f" "$pgfile"
         pgi=$((pgi + 1))
       done
     fi
@@ -299,18 +249,7 @@ run_write_target_detectors_b() {
         --log-file=*)
           pqkind="--log-file"; pqfile="${pqtok#--log-file=}" ;;
       esac
-      if [ -n "$pqfile" ]; then
-        local pqexp pqres
-        pqexp=$(expand_path "$pqfile")
-        if [[ "$pqexp" != /* ]]; then
-          pqexp="$EFFECTIVE_CWD/$pqexp"
-        fi
-        pqres=$(resolve_path "$pqexp")
-        if ! is_write_permitted "$pqres"; then
-          echo "BLOCKED: 'psql $pqkind' targets '$pqres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      fi
+      [ -n "$pqfile" ] && validate_command_path write "psql $pqkind" "$pqfile"
       pqi=$((pqi + 1))
     done
   fi
@@ -336,18 +275,7 @@ run_write_target_detectors_b() {
         --tee=*)
           msfile="${mstok#--tee=}" ;;
       esac
-      if [ -n "$msfile" ]; then
-        local msexp msres
-        msexp=$(expand_path "$msfile")
-        if [[ "$msexp" != /* ]]; then
-          msexp="$EFFECTIVE_CWD/$msexp"
-        fi
-        msres=$(resolve_path "$msexp")
-        if ! is_write_permitted "$msres"; then
-          echo "BLOCKED: 'mysql --tee' targets '$msres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      fi
+      [ -n "$msfile" ] && validate_command_path write "mysql --tee" "$msfile"
       msi=$((msi + 1))
     done
   fi
@@ -367,18 +295,7 @@ run_write_target_detectors_b() {
         --result-file=*)
           myfile="${mytok#--result-file=}" ;;
       esac
-      if [ -n "$myfile" ]; then
-        local myexp myres
-        myexp=$(expand_path "$myfile")
-        if [[ "$myexp" != /* ]]; then
-          myexp="$EFFECTIVE_CWD/$myexp"
-        fi
-        myres=$(resolve_path "$myexp")
-        if ! is_write_permitted "$myres"; then
-          echo "BLOCKED: 'mysqldump --result-file' targets '$myres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      fi
+      [ -n "$myfile" ] && validate_command_path write "mysqldump --result-file" "$myfile"
       myi=$((myi + 1))
     done
   fi
@@ -425,18 +342,7 @@ run_write_target_detectors_b() {
           mtdir=$(dirname -- "$mttok")
           ;;
       esac
-      if [ -n "$mtdir" ]; then
-        local mtexp mtres
-        mtexp=$(expand_path "$mtdir")
-        if [[ "$mtexp" != /* ]]; then
-          mtexp="$EFFECTIVE_CWD/$mtexp"
-        fi
-        mtres=$(resolve_path "$mtexp")
-        if ! is_write_permitted "$mtres"; then
-          echo "BLOCKED: 'mktemp' targets dir '$mtres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      fi
+      [ -n "$mtdir" ] && validate_command_path write "mktemp dir" "$mtdir"
       mti=$((mti + 1))
     done
   fi
@@ -471,16 +377,7 @@ run_write_target_detectors_b() {
             -*|'') sci=$((sci + 1)); continue ;;
           esac
         fi
-        local scexp scresolved
-        scexp=$(expand_path "$sctok")
-        if [[ "$scexp" != /* ]]; then
-          scexp="$EFFECTIVE_CWD/$scexp"
-        fi
-        scresolved=$(resolve_path "$scexp")
-        if ! is_write_permitted "$scresolved"; then
-          echo "BLOCKED: '$SPECIAL_CMD' targets '$scresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
+        validate_command_path write "$SPECIAL_CMD" "$sctok"
         # mknod has only one PATH positional; mkfifo accepts many.
         [ "$SPECIAL_CMD" = "mknod" ] && break
         sci=$((sci + 1))
