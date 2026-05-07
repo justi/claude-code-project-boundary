@@ -43,6 +43,8 @@ source "$_GUARD_DIR/lib/heredoc.sh"
 source "$_GUARD_DIR/lib/detectors/inplace.sh"
 # shellcheck source=lib/detectors/destructive.sh
 source "$_GUARD_DIR/lib/detectors/destructive.sh"
+# shellcheck source=lib/detectors/permissions.sh
+source "$_GUARD_DIR/lib/detectors/permissions.sh"
 # shellcheck source=lib/detectors/write_targets.sh
 source "$_GUARD_DIR/lib/detectors/write_targets.sh"
 # shellcheck source=lib/detectors/write_targets_b.sh
