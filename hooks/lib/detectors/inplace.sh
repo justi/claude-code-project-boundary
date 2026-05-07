@@ -212,7 +212,7 @@ run_inplace_detectors() {
   #   awk [opts] -f script.awk file1 ...       (no positional PROG)
   #   awk [opts] -E script.awk file1 ...       (no positional PROG)
   #   awk [opts] --source='PROG' file1 ...     (no positional PROG)
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(awk|gawk)([[:space:]]|$)'; then
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(awk|gawk|mawk|nawk)([[:space:]]|$)'; then
     local awk_inplace=0
     local awk_explicit_prog=0
     local awk_t=1 awk_n=${#CMD_TOKENS_SCAN[@]}
@@ -220,14 +220,14 @@ run_inplace_detectors() {
       local atok
       atok=$(strip_quotes "${CMD_TOKENS_SCAN[$awk_t]}")
       case "$atok" in
-        -i)
+        -i|--include)
           if [ $((awk_t + 1)) -lt $awk_n ]; then
             local libtok
             libtok=$(strip_quotes "${CMD_TOKENS_SCAN[$((awk_t + 1))]}")
             [ "$libtok" = "inplace" ] && awk_inplace=1
           fi
           ;;
-        -iinplace|--include=inplace)
+        -iinplace|--include=inplace|--inplace|--inplace=*)
           awk_inplace=1 ;;
         -f|-E|--file|--exec|--source)
           awk_explicit_prog=1 ;;
