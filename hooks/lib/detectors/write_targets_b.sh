@@ -267,7 +267,17 @@ run_write_target_detectors_b() {
             # as bare `o` / `g` / `w` / `s` / `copy` at the start of the
             # value. `\!` keeps its backslash (! is non-alphanumeric).
             # Match either form anchored at the start of the value.
-            if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy|\\!)([[:space:]]|$)'; then
+            # Codex r5 round-4 (Q1B): ANSI-C quoting `$'...'` is not
+            # unwrapped by strip_quotes; fail-closed on the prefix.
+            if [[ "$pqsql" == \$\'* ]]; then
+              echo "BLOCKED: 'psql -c' value uses ANSI-C quoting (\$'...') which can encode arbitrary escape sequences. Cannot be safely inspected. Ask user for explicit permission." >&2
+              exit 2
+            fi
+            # Codex r5 round-4 (Q1A): no-space meta args like
+            # `\o/tmp/out` and `\o|cmd` — extend the separator class
+            # to cover `/` (path attached) and `|` (pipe attached) and
+            # `\\` (next meta attached) on top of whitespace.
+            if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy|\\!)([[:space:]/|\\]|$)'; then
               echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy / \\!) that writes files or executes shell. Cannot be safely inspected. Ask user for explicit permission." >&2
               exit 2
             fi
@@ -281,10 +291,13 @@ run_write_target_detectors_b() {
           else
             pqsql=$(strip_quotes "${pqtok#-c}")
           fi
-          # See note above: alias-escape pass strips backslash before
-          # alphanumeric, so meta arrives as `o` / `g` / `w` / `s` /
-          # `copy`. `\!` keeps its backslash.
-          if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy|\\!)([[:space:]]|$)'; then
+          # See note above. Round-4 fix: also check ANSI-C $'...' prefix
+          # and extend separator class to cover no-space attached args.
+          if [[ "$pqsql" == \$\'* ]]; then
+            echo "BLOCKED: 'psql -c' value uses ANSI-C quoting (\$'...') which can encode arbitrary escape sequences. Cannot be safely inspected. Ask user for explicit permission." >&2
+            exit 2
+          fi
+          if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy|\\!)([[:space:]/|\\]|$)'; then
             echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy / \\!) that writes files or executes shell. Cannot be safely inspected. Ask user for explicit permission." >&2
             exit 2
           fi
