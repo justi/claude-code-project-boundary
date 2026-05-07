@@ -89,17 +89,7 @@ run_write_target_detectors() {
         fi
         if [[ "$install_tok" == -* ]]; then
           if [[ "$install_tok" == --target-directory=* ]]; then
-            local install_attached_val="${install_tok#*=}"
-            install_attached_val=$(expand_path "$install_attached_val")
-            if [[ "$install_attached_val" != /* ]]; then
-              install_attached_val="$EFFECTIVE_CWD/$install_attached_val"
-            fi
-            local install_attached_resolved
-            install_attached_resolved=$(resolve_path "$install_attached_val")
-            if ! is_inside_project "$install_attached_resolved"; then
-              echo "BLOCKED: 'install --target-directory' targets '$install_attached_resolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-              exit 2
-            fi
+            validate_command_path strict "install --target-directory" "${install_tok#*=}"
             continue
           fi
           case "$install_tok" in
@@ -109,15 +99,7 @@ run_write_target_detectors() {
           continue
         fi
       fi
-      TARGET=$(expand_path "$TARGET")
-      if [[ "$TARGET" != /* ]]; then
-        TARGET="$EFFECTIVE_CWD/$TARGET"
-      fi
-      RESOLVED=$(resolve_path "$TARGET")
-      if ! is_inside_project "$RESOLVED"; then
-        echo "BLOCKED: 'install' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path strict install "$TARGET"
     done < <(tokenize_args "$install_raw")
   fi
 
@@ -167,15 +149,7 @@ run_write_target_detectors() {
           continue
         fi
       fi
-      TARGET=$(expand_path "$TARGET")
-      if [[ "$TARGET" != /* ]]; then
-        TARGET="$EFFECTIVE_CWD/$TARGET"
-      fi
-      RESOLVED=$(resolve_path "$TARGET")
-      if ! is_inside_project "$RESOLVED"; then
-        echo "BLOCKED: 'mkdir' targets '$RESOLVED' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path strict mkdir "$TARGET"
     done < <(tokenize_args "$mkdir_raw")
   fi
 
@@ -221,17 +195,7 @@ run_write_target_detectors() {
         if [[ "$rsync_tok" == -* ]]; then
           case "$rsync_tok" in
             --log-file=*|--partial-dir=*|--backup-dir=*|--temp-dir=*|--write-batch=*|--only-write-batch=*)
-              local rsync_attached_val="${rsync_tok#*=}"
-              rsync_attached_val=$(expand_path "$rsync_attached_val")
-              if [[ "$rsync_attached_val" != /* ]]; then
-                rsync_attached_val="$EFFECTIVE_CWD/$rsync_attached_val"
-              fi
-              local rsync_attached_resolved
-              rsync_attached_resolved=$(resolve_path "$rsync_attached_val")
-              if ! is_inside_project "$rsync_attached_resolved"; then
-                echo "BLOCKED: 'rsync ${rsync_tok%%=*}' targets '$rsync_attached_resolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-                exit 2
-              fi
+              validate_command_path strict "rsync ${rsync_tok%%=*}" "${rsync_tok#*=}"
               ;;
           esac
           continue
@@ -253,15 +217,7 @@ run_write_target_detectors() {
         *:*) continue ;;
       esac
       unset _rsync_first_seg
-      TARGET=$(expand_path "$TARGET")
-      if [[ "$TARGET" != /* ]]; then
-        TARGET="$EFFECTIVE_CWD/$TARGET"
-      fi
-      RESOLVED=$(resolve_path "$TARGET")
-      if ! is_inside_project "$RESOLVED"; then
-        echo "BLOCKED: 'rsync' argument '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path strict rsync "$TARGET"
     done < <(tokenize_args "$rsync_raw")
   fi
 
@@ -288,18 +244,7 @@ run_write_target_detectors() {
         ti=$((ti + 1))
         continue
       fi
-      if [ -n "$tar_dir" ]; then
-        tar_dir=$(expand_path "$tar_dir")
-        if [[ "$tar_dir" != /* ]]; then
-          tar_dir="$EFFECTIVE_CWD/$tar_dir"
-        fi
-        local resolved_tar
-        resolved_tar=$(resolve_path "$tar_dir")
-        if ! is_write_permitted "$resolved_tar"; then
-          echo "BLOCKED: 'tar -C' targets '$resolved_tar' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      fi
+      [ -n "$tar_dir" ] && validate_command_path write "tar -C" "$tar_dir"
     done
   fi
 
@@ -308,16 +253,7 @@ run_write_target_detectors() {
     local unzip_dir
     while IFS= read -r unzip_dir; do
       [ -z "$unzip_dir" ] && continue
-      unzip_dir=$(expand_path "$unzip_dir")
-      if [[ "$unzip_dir" != /* ]]; then
-        unzip_dir="$EFFECTIVE_CWD/$unzip_dir"
-      fi
-      local resolved_unzip
-      resolved_unzip=$(resolve_path "$unzip_dir")
-      if ! is_write_permitted "$resolved_unzip"; then
-        echo "BLOCKED: 'unzip -d' targets '$resolved_unzip' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path write "unzip -d" "$unzip_dir"
     done < <(extract_option_values "-d" "" || true)
   fi
 
@@ -326,16 +262,7 @@ run_write_target_detectors() {
     local cpio_dir
     while IFS= read -r cpio_dir; do
       [ -z "$cpio_dir" ] && continue
-      cpio_dir=$(expand_path "$cpio_dir")
-      if [[ "$cpio_dir" != /* ]]; then
-        cpio_dir="$EFFECTIVE_CWD/$cpio_dir"
-      fi
-      local resolved_cpio
-      resolved_cpio=$(resolve_path "$cpio_dir")
-      if ! is_write_permitted "$resolved_cpio"; then
-        echo "BLOCKED: 'cpio -D' targets '$resolved_cpio' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path write "cpio -D" "$cpio_dir"
     done < <(extract_option_values "-D" "" || true)
   fi
 
@@ -370,18 +297,7 @@ run_write_target_detectors() {
         zdir=$(strip_quotes "${CMD_TOKENS_SCAN[$((zi + 1))]}")
         zi=$((zi + 1))
       fi
-      if [ -n "$zdir" ]; then
-        zdir=$(expand_path "$zdir")
-        if [[ "$zdir" != /* ]]; then
-          zdir="$EFFECTIVE_CWD/$zdir"
-        fi
-        local zresolved
-        zresolved=$(resolve_path "$zdir")
-        if ! is_write_permitted "$zresolved"; then
-          echo "BLOCKED: '7z -o<dir>' targets '$zresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      fi
+      [ -n "$zdir" ] && validate_command_path write "7z -o<dir>" "$zdir"
       zi=$((zi + 1))
     done
     # Pass 1b: -w<path> working-directory (Codex round-4 follow-up).
@@ -400,18 +316,7 @@ run_write_target_detectors() {
         wdir=$(strip_quotes "${CMD_TOKENS_SCAN[$((wzi + 1))]}")
         wzi=$((wzi + 1))
       fi
-      if [ -n "$wdir" ]; then
-        wdir=$(expand_path "$wdir")
-        if [[ "$wdir" != /* ]]; then
-          wdir="$EFFECTIVE_CWD/$wdir"
-        fi
-        local wresolved
-        wresolved=$(resolve_path "$wdir")
-        if ! is_write_permitted "$wresolved"; then
-          echo "BLOCKED: '7z -w<path>' targets '$wresolved' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-          exit 2
-        fi
-      fi
+      [ -n "$wdir" ] && validate_command_path write "7z -w<path>" "$wdir"
       wzi=$((wzi + 1))
     done
     # Pass 2: locate verb (first non-flag positional after binary) and,
@@ -439,17 +344,7 @@ run_write_target_detectors() {
               -*|'') zai=$((zai + 1)); continue ;;
             esac
           fi
-          local zaexp
-          zaexp=$(expand_path "$zat")
-          if [[ "$zaexp" != /* ]]; then
-            zaexp="$EFFECTIVE_CWD/$zaexp"
-          fi
-          local zaresolved
-          zaresolved=$(resolve_path "$zaexp")
-          if ! is_write_permitted "$zaresolved"; then
-            echo "BLOCKED: '7z $zcmd' archive '$zaresolved' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
-            exit 2
-          fi
+          validate_command_path write "7z $zcmd archive" "$zat"
           break
         done
         ;;
