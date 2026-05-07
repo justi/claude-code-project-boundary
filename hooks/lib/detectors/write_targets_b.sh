@@ -231,35 +231,118 @@ run_write_target_detectors_b() {
   # Database dump tools accept an explicit output-file flag that
   # bypasses the redirect walker. Both write a SQL dump to FILE;
   # outside-project FILE is a boundary violation.
-  if command_name_is "pg_dump"; then
-    local pgi=1 pgn=${#CMD_TOKENS_SCAN[@]}
-    while [ $pgi -lt $pgn ]; do
-      local pgtok
-      pgtok=$(strip_quotes "${CMD_TOKENS_SCAN[$pgi]}")
-      local pgfile=""
-      case "$pgtok" in
-        -f|--file)
-          if [ $((pgi + 1)) -lt $pgn ]; then
-            pgfile=$(strip_quotes "${CMD_TOKENS_SCAN[$((pgi + 1))]}")
-            pgi=$((pgi + 1))
+  local PG_CMD
+  for PG_CMD in pg_dump pg_dumpall; do
+    if command_name_is "$PG_CMD"; then
+      local pgi=1 pgn=${#CMD_TOKENS_SCAN[@]}
+      while [ $pgi -lt $pgn ]; do
+        local pgtok
+        pgtok=$(strip_quotes "${CMD_TOKENS_SCAN[$pgi]}")
+        local pgfile=""
+        case "$pgtok" in
+          -f|--file)
+            if [ $((pgi + 1)) -lt $pgn ]; then
+              pgfile=$(strip_quotes "${CMD_TOKENS_SCAN[$((pgi + 1))]}")
+              pgi=$((pgi + 1))
+            fi
+            ;;
+          --file=*)
+            pgfile="${pgtok#--file=}" ;;
+        esac
+        if [ -n "$pgfile" ]; then
+          local pgexp pgres
+          pgexp=$(expand_path "$pgfile")
+          if [[ "$pgexp" != /* ]]; then
+            pgexp="$EFFECTIVE_CWD/$pgexp"
+          fi
+          pgres=$(resolve_path "$pgexp")
+          if ! is_write_permitted "$pgres"; then
+            echo "BLOCKED: '$PG_CMD -f' targets '$pgres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+            exit 2
+          fi
+        fi
+        pgi=$((pgi + 1))
+      done
+    fi
+  done
+
+  # --- psql -o / -L: query output + session log (round-5 follow) ---
+  if command_name_is "psql"; then
+    local pqi=1 pqn=${#CMD_TOKENS_SCAN[@]}
+    while [ $pqi -lt $pqn ]; do
+      local pqtok
+      pqtok=$(strip_quotes "${CMD_TOKENS_SCAN[$pqi]}")
+      local pqfile="" pqkind=""
+      case "$pqtok" in
+        -o|--output)
+          pqkind="-o"
+          if [ $((pqi + 1)) -lt $pqn ]; then
+            pqfile=$(strip_quotes "${CMD_TOKENS_SCAN[$((pqi + 1))]}")
+            pqi=$((pqi + 1))
           fi
           ;;
-        --file=*)
-          pgfile="${pgtok#--file=}" ;;
+        --output=*)
+          pqkind="--output"; pqfile="${pqtok#--output=}" ;;
+        -L|--log-file)
+          pqkind="-L"
+          if [ $((pqi + 1)) -lt $pqn ]; then
+            pqfile=$(strip_quotes "${CMD_TOKENS_SCAN[$((pqi + 1))]}")
+            pqi=$((pqi + 1))
+          fi
+          ;;
+        --log-file=*)
+          pqkind="--log-file"; pqfile="${pqtok#--log-file=}" ;;
       esac
-      if [ -n "$pgfile" ]; then
-        local pgexp pgres
-        pgexp=$(expand_path "$pgfile")
-        if [[ "$pgexp" != /* ]]; then
-          pgexp="$EFFECTIVE_CWD/$pgexp"
+      if [ -n "$pqfile" ]; then
+        local pqexp pqres
+        pqexp=$(expand_path "$pqfile")
+        if [[ "$pqexp" != /* ]]; then
+          pqexp="$EFFECTIVE_CWD/$pqexp"
         fi
-        pgres=$(resolve_path "$pgexp")
-        if ! is_write_permitted "$pgres"; then
-          echo "BLOCKED: 'pg_dump -f' targets '$pgres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+        pqres=$(resolve_path "$pqexp")
+        if ! is_write_permitted "$pqres"; then
+          echo "BLOCKED: 'psql $pqkind' targets '$pqres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
           exit 2
         fi
       fi
-      pgi=$((pgi + 1))
+      pqi=$((pqi + 1))
+    done
+  fi
+
+  # --- mysql --tee=FILE: session echo to file (round-5 follow) ---
+  if command_name_is "mysql"; then
+    local msi=1 msn=${#CMD_TOKENS_SCAN[@]}
+    while [ $msi -lt $msn ]; do
+      local mstok
+      mstok=$(strip_quotes "${CMD_TOKENS_SCAN[$msi]}")
+      local msfile=""
+      case "$mstok" in
+        --tee)
+          if [ $((msi + 1)) -lt $msn ]; then
+            local msnext
+            msnext=$(strip_quotes "${CMD_TOKENS_SCAN[$((msi + 1))]}")
+            case "$msnext" in
+              -*) ;;
+              *) msfile="$msnext"; msi=$((msi + 1)) ;;
+            esac
+          fi
+          ;;
+        --tee=*)
+          msfile="${mstok#--tee=}" ;;
+      esac
+      if [ -n "$msfile" ]; then
+        local msexp msres
+        msexp=$(expand_path "$msfile")
+        if [[ "$msexp" != /* ]]; then
+          msexp="$EFFECTIVE_CWD/$msexp"
+        fi
+        msres=$(resolve_path "$msexp")
+        if ! is_write_permitted "$msres"; then
+          echo "BLOCKED: 'mysql --tee' targets '$msres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+      fi
+      msi=$((msi + 1))
     done
   fi
   if command_name_is "mysqldump"; then
