@@ -246,6 +246,8 @@ run_write_target_detectors_b() {
               pgi=$((pgi + 1))
             fi
             ;;
+          -f?*)
+            pgfile="${pgtok#-f}" ;;
           --file=*)
             pgfile="${pgtok#--file=}" ;;
         esac
