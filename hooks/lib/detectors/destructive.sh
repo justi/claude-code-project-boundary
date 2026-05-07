@@ -16,7 +16,7 @@
 
 run_destructive_detectors() {
   # --- xargs with dangerous commands ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])xargs($|[[:space:]])'; then
+  if command_name_is "xargs"; then
     # Check if xargs is followed by a dangerous command
     local xargs_cmd
     xargs_cmd=$(echo "$CMD" | sed -E 's/.*xargs[[:space:]]+((-[^ ]*[[:space:]]+)*)//' | awk '{print $1}')
@@ -29,7 +29,7 @@ run_destructive_detectors() {
   fi
 
   # --- find with -delete or -exec rm/mv outside project ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])find($|[[:space:]])'; then
+  if command_name_is "find"; then
     if echo "$CMD" | grep -qE '(-delete|-(exec|execdir|ok|okdir)[[:space:]]+([^[:space:]]+/)?(rm|mv)([[:space:]]|$))'; then
       # Extract ALL find paths (non-option arguments after 'find')
       # Skip options like -L, -H, -P that come before the paths
@@ -128,6 +128,12 @@ run_destructive_detectors() {
   fi
 
   # --- File deletion: allowed inside project, blocked outside ---
+  # NOTE: kept as raw substring regex (NOT command_name_is) by design.
+  # Some tests deliberately over-block `nsenter rm /etc/x`, `chroot rm`,
+  # and `docker run alpine rm /` because host-mount parsing is not in
+  # scope. command_name_is would only fire when the verb post-wrapper is
+  # `rm`, missing those forms. Substring is the intended fail-closed
+  # surface here.
   if echo "$CMD" | grep -qE '(^|[[:space:]])rm($|[[:space:]])'; then
     # Extract paths from rm command (skip flags)
     local rm_raw
@@ -149,7 +155,7 @@ run_destructive_detectors() {
   fi
 
   # --- Moving files outside project ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])mv($|[[:space:]])'; then
+  if command_name_is "mv"; then
     # Check -t / --target-directory
     local mv_target_dir
     # STRICT: mv with -t still deletes sources from their original paths.
@@ -173,7 +179,7 @@ run_destructive_detectors() {
   fi
 
   # --- cp command: check all non-flag arguments ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])cp($|[[:space:]])'; then
+  if command_name_is "cp"; then
     # Check -t / --target-directory
     local cp_target_dir
     while IFS= read -r cp_target_dir; do
@@ -191,7 +197,7 @@ run_destructive_detectors() {
   fi
 
   # --- ln command: check all non-flag arguments ---
-  if echo "$CMD" | grep -qE '(^|[[:space:]])ln($|[[:space:]])'; then
+  if command_name_is "ln"; then
     local ln_raw
     ln_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])ln[[:space:]]+.*' | sed 's/^[[:space:]]*ln[[:space:]]*//' || true)
 

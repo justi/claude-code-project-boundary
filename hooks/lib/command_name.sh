@@ -10,6 +10,26 @@
 # command_name_is reads a CMD variable from its caller's dynamic
 # scope; other functions are pure.
 
+# --- command_name_matches PATTERN ---
+# Like command_name_is but accepts a pipe-separated list of names so a
+# detector that fires for any of several aliases (e.g. "perl|ruby" or
+# "7z|7za|7zr|7zz|7zzs") gets one anchored gate instead of a raw
+# `echo "$CMD" | grep -qE` substring match. Reads CMD from caller's
+# dynamic scope (same contract as command_name_is).
+#
+# Returns 0 iff command_name_is matches any of the alternatives.
+command_name_matches() {
+  local pattern="$1"
+  local IFS='|'
+  local -a _cn_cmds=($pattern)
+  unset IFS
+  local _cn_c
+  for _cn_c in "${_cn_cmds[@]}"; do
+    command_name_is "$_cn_c" && return 0
+  done
+  return 1
+}
+
 # --- normalize_command_view INPUT ---
 # Apply the full command-view normalization pipeline used by guard.sh
 # for both the live CMD and the heredoc-blanked CMD_BLANKED:
