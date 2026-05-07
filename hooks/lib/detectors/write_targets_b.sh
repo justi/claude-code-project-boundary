@@ -227,6 +227,73 @@ run_write_target_detectors_b() {
     fi
   done
 
+  # --- pg_dump -f / mysqldump --result-file: DB dump output (r5) ---
+  # Database dump tools accept an explicit output-file flag that
+  # bypasses the redirect walker. Both write a SQL dump to FILE;
+  # outside-project FILE is a boundary violation.
+  if command_name_is "pg_dump"; then
+    local pgi=1 pgn=${#CMD_TOKENS_SCAN[@]}
+    while [ $pgi -lt $pgn ]; do
+      local pgtok
+      pgtok=$(strip_quotes "${CMD_TOKENS_SCAN[$pgi]}")
+      local pgfile=""
+      case "$pgtok" in
+        -f|--file)
+          if [ $((pgi + 1)) -lt $pgn ]; then
+            pgfile=$(strip_quotes "${CMD_TOKENS_SCAN[$((pgi + 1))]}")
+            pgi=$((pgi + 1))
+          fi
+          ;;
+        --file=*)
+          pgfile="${pgtok#--file=}" ;;
+      esac
+      if [ -n "$pgfile" ]; then
+        local pgexp pgres
+        pgexp=$(expand_path "$pgfile")
+        if [[ "$pgexp" != /* ]]; then
+          pgexp="$EFFECTIVE_CWD/$pgexp"
+        fi
+        pgres=$(resolve_path "$pgexp")
+        if ! is_write_permitted "$pgres"; then
+          echo "BLOCKED: 'pg_dump -f' targets '$pgres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+      fi
+      pgi=$((pgi + 1))
+    done
+  fi
+  if command_name_is "mysqldump"; then
+    local myi=1 myn=${#CMD_TOKENS_SCAN[@]}
+    while [ $myi -lt $myn ]; do
+      local mytok
+      mytok=$(strip_quotes "${CMD_TOKENS_SCAN[$myi]}")
+      local myfile=""
+      case "$mytok" in
+        -r|--result-file)
+          if [ $((myi + 1)) -lt $myn ]; then
+            myfile=$(strip_quotes "${CMD_TOKENS_SCAN[$((myi + 1))]}")
+            myi=$((myi + 1))
+          fi
+          ;;
+        --result-file=*)
+          myfile="${mytok#--result-file=}" ;;
+      esac
+      if [ -n "$myfile" ]; then
+        local myexp myres
+        myexp=$(expand_path "$myfile")
+        if [[ "$myexp" != /* ]]; then
+          myexp="$EFFECTIVE_CWD/$myexp"
+        fi
+        myres=$(resolve_path "$myexp")
+        if ! is_write_permitted "$myres"; then
+          echo "BLOCKED: 'mysqldump --result-file' targets '$myres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+          exit 2
+        fi
+      fi
+      myi=$((myi + 1))
+    done
+  fi
+
   # --- mktemp -p<dir> / --tmpdir=<dir>: temp file/dir creation ---
   # `mktemp -p DIR TEMPLATE` and `mktemp --tmpdir=DIR TEMPLATE`
   # create a temp file or directory inside DIR. Outside-project DIR
