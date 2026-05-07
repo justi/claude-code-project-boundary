@@ -246,7 +246,7 @@ run_destructive_detectors() {
 # lets us preserve the original evaluation order from the caller.
 run_permissions_detectors() {
   local CMD_NAME TARGET RESOLVED
-  for CMD_NAME in chmod chown; do
+  for CMD_NAME in chmod chown chgrp; do
     if echo "$CMD" | grep -qE "(^|[[:space:]])${CMD_NAME}($|[[:space:]])"; then
       # Extract args after command name, skip flags, then skip the first
       # non-flag token (mode for chmod, owner[:group] for chown)
