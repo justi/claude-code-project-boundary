@@ -53,17 +53,8 @@ run_permissions_detectors() {
           skipped_first=1
           continue
         fi
-        TARGET=$(expand_path "$TARGET")
-        if [[ "$TARGET" != /* ]]; then
-          TARGET="$EFFECTIVE_CWD/$TARGET"
-        fi
-        RESOLVED=$(resolve_path "$TARGET")
-
         # STRICT: chmod/chown can weaponize permissions; allowlist must not apply.
-        if ! is_inside_project "$RESOLVED"; then
-          echo "BLOCKED: '${CMD_NAME}' targets '$RESOLVED' which is OUTSIDE project directory. Ask user for explicit permission." >&2
-          exit 2
-        fi
+        validate_command_path strict "$CMD_NAME" "$TARGET"
       done < <(tokenize_args "$perm_raw")
     fi
   done
@@ -90,16 +81,7 @@ run_permissions_detectors() {
           -*|'') sfi=$((sfi + 1)); continue ;;
         esac
       fi
-      local sfexp sfres
-      sfexp=$(expand_path "$sftok")
-      if [[ "$sfexp" != /* ]]; then
-        sfexp="$EFFECTIVE_CWD/$sfexp"
-      fi
-      sfres=$(resolve_path "$sfexp")
-      if ! is_inside_project "$sfres"; then
-        echo "BLOCKED: 'setfattr' targets '$sfres' which is OUTSIDE project directory. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path strict setfattr "$sftok"
       sfi=$((sfi + 1))
     done
   fi
@@ -126,16 +108,7 @@ run_permissions_detectors() {
         cf_skipped_flags=1
         cfi=$((cfi + 1)); continue
       fi
-      local cfexp cfres
-      cfexp=$(expand_path "$cftok")
-      if [[ "$cfexp" != /* ]]; then
-        cfexp="$EFFECTIVE_CWD/$cfexp"
-      fi
-      cfres=$(resolve_path "$cfexp")
-      if ! is_inside_project "$cfres"; then
-        echo "BLOCKED: 'chflags' targets '$cfres' which is OUTSIDE project directory. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path strict chflags "$cftok"
       cfi=$((cfi + 1))
     done
   fi
@@ -171,16 +144,7 @@ run_permissions_detectors() {
       if [ $sc_remove -eq 0 ] && [ $sc_skipped_spec -eq 0 ]; then
         sc_skipped_spec=1; sci=$((sci + 1)); continue
       fi
-      local scexp scres
-      scexp=$(expand_path "$sctok")
-      if [[ "$scexp" != /* ]]; then
-        scexp="$EFFECTIVE_CWD/$scexp"
-      fi
-      scres=$(resolve_path "$scexp")
-      if ! is_inside_project "$scres"; then
-        echo "BLOCKED: 'setcap' targets '$scres' which is OUTSIDE project directory. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path strict setcap "$sctok"
       sci=$((sci + 1))
     done
   fi
@@ -216,16 +180,7 @@ run_permissions_detectors() {
       if [ $ca_skipped_spec -eq 0 ]; then
         ca_skipped_spec=1; cai=$((cai + 1)); continue
       fi
-      local caexp cares
-      caexp=$(expand_path "$catok")
-      if [[ "$caexp" != /* ]]; then
-        caexp="$EFFECTIVE_CWD/$caexp"
-      fi
-      cares=$(resolve_path "$caexp")
-      if ! is_inside_project "$cares"; then
-        echo "BLOCKED: 'chattr' targets '$cares' which is OUTSIDE project directory. Ask user for explicit permission." >&2
-        exit 2
-      fi
+      validate_command_path strict chattr "$catok"
       cai=$((cai + 1))
     done
   fi
@@ -256,16 +211,7 @@ run_permissions_detectors() {
             -*|'') atri=$((atri + 1)); continue ;;
           esac
         fi
-        local atrexp atrres
-        atrexp=$(expand_path "$atrtok")
-        if [[ "$atrexp" != /* ]]; then
-          atrexp="$EFFECTIVE_CWD/$atrexp"
-        fi
-        atrres=$(resolve_path "$atrexp")
-        if ! is_inside_project "$atrres"; then
-          echo "BLOCKED: 'attr' targets '$atrres' which is OUTSIDE project directory. Ask user for explicit permission." >&2
-          exit 2
-        fi
+        validate_command_path strict attr "$atrtok"
         atri=$((atri + 1))
       done
     fi
