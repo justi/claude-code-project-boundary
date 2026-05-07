@@ -66,6 +66,39 @@ run_destructive_detectors() {
         fi
       done
     fi
+
+    # --- find -fprint / -fls / -fprintf write target (round-5) ---
+    # `find ... -fprint FILE` truncates FILE and writes matching
+    # paths into it (find opens with O_WRONLY|O_CREAT|O_TRUNC).
+    # `-fls` (long-listing) and `-fprintf FILE FORMAT` have the
+    # same write semantics. The find walker above only handled
+    # destructive-action verbs (-delete / -exec rm); the print-to-
+    # file actions slipped through.
+    if echo "$CMD" | grep -qE '(\-fprint|\-fls|\-fprintf)([[:space:]]|$)'; then
+      local fpi=1 fpn=${#CMD_TOKENS_SCAN[@]}
+      while [ $fpi -lt $fpn ]; do
+        local fptok
+        fptok=$(strip_quotes "${CMD_TOKENS_SCAN[$fpi]}")
+        case "$fptok" in
+          -fprint|-fls|-fprintf)
+            if [ $((fpi + 1)) -lt $fpn ]; then
+              local fpval fpexp fpres
+              fpval=$(strip_quotes "${CMD_TOKENS_SCAN[$((fpi + 1))]}")
+              fpexp=$(expand_path "$fpval")
+              if [[ "$fpexp" != /* ]]; then
+                fpexp="$EFFECTIVE_CWD/$fpexp"
+              fi
+              fpres=$(resolve_path "$fpexp")
+              if ! is_write_permitted "$fpres"; then
+                echo "BLOCKED: 'find ${fptok}' targets '$fpres' which is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
+                exit 2
+              fi
+            fi
+            ;;
+        esac
+        fpi=$((fpi + 1))
+      done
+    fi
   fi
 
   # --- shred / wipe / srm / bcwipe: destructive overwrite (and ---
