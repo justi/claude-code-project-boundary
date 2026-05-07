@@ -239,7 +239,7 @@ run_permissions_detectors() {
     local _j
     for ((_j=1; _j<${#CMD_TOKENS_SCAN[@]}; _j++)); do
       case "$(strip_quotes "${CMD_TOKENS_SCAN[$_j]}")" in
-        -s|-r) atr_write=1; break ;;
+        -s|-r|--set|--remove|--set=*|--remove=*) atr_write=1; break ;;
       esac
     done
     if [ $atr_write -eq 1 ]; then
@@ -251,7 +251,8 @@ run_permissions_detectors() {
         if [ $atr_seen_dashdash -eq 0 ]; then
           case "$atrtok" in
             --) atr_seen_dashdash=1; atri=$((atri + 1)); continue ;;
-            -s|-V|-r|-g) atri=$((atri + 2)); continue ;;
+            -s|-V|-r|-g|--set|--value|--remove|--get) atri=$((atri + 2)); continue ;;
+            --set=*|--value=*|--remove=*|--get=*) atri=$((atri + 1)); continue ;;
             -*|'') atri=$((atri + 1)); continue ;;
           esac
         fi
