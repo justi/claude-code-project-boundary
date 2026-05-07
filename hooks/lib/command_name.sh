@@ -10,6 +10,34 @@
 # command_name_is reads a CMD variable from its caller's dynamic
 # scope; other functions are pure.
 
+# --- normalize_command_view INPUT ---
+# Apply the full command-view normalization pipeline used by guard.sh
+# for both the live CMD and the heredoc-blanked CMD_BLANKED:
+#   1. trim leading/trailing whitespace
+#   2. strip subshell grouping `(...)` parens at token boundaries
+#      (preserve `$(...)` substitution form)
+#   3. strip alias-escape backslash before [a-zA-Z_]
+#   4. strip surrounding quotes from the command-name token
+#   5. strip common binary-path prefixes from the leading `/usr/bin/...`
+#      / `/opt/homebrew/bin/...` form (fallback for empty tokenizer)
+#   6. apply strip_command_name_prefix (post-wrapper aware)
+#   7. collapse duplicated whitespace
+#
+# Extracted from guard.sh in the round-5 refactor. Both CMD and
+# CMD_BLANKED now go through the same pipeline so a fix to any
+# normalization step (e.g. adding `/opt/homebrew/bin` to the prefix
+# list) lands in both views simultaneously.
+normalize_command_view() {
+  local view="$1"
+  view="$(printf '%s' "$view" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
+  view="$(printf '%s' "$view" | sed -E 's/(^|[[:space:]])\(+/\1/g; s/\)+($|[[:space:]])/\1/g')"
+  view="$(printf '%s' "$view" | sed -E 's/\\([a-zA-Z_])/\1/g')"
+  view="$(strip_command_name_quotes "$view")"
+  view="$(printf '%s' "$view" | sed -E 's#^/(usr/local/bin|usr/bin|bin|sbin|usr/sbin|opt/homebrew/bin)/##')"
+  view="$(strip_command_name_prefix "$view")"
+  printf '%s' "$view" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
 # --- Strip /bin/, /sbin/, /usr/bin/, /usr/sbin/, /usr/local/bin/, ---
 # /opt/homebrew/bin/ prefix from a command-name token. The Homebrew
 # entry is required because Apple Silicon brews default to

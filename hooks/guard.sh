@@ -298,31 +298,7 @@ check_single_command() {
   # Normalize these into the bare command form before any detection runs.
   # This only touches the string used for matching — argument extraction below
   # operates on the normalized CMD too, so paths are not mangled.
-  # Strip subshell grouping parens only when they sit at a token boundary so
-  # that `$(…)` (command substitution) is NOT mangled — that form is caught
-  # by a dedicated check below. `(rm …)` → `rm …`, `( rm … )` → `rm …`,
-  # `$(foo)` stays as is because the `(` is preceded by `$`, not space/start.
-  CMD="$(printf '%s' "$CMD" | sed -E 's/(^|[[:space:]])\(+/\1/g; s/\)+($|[[:space:]])/\1/g')"
-  # Strip a backslash that precedes a shell-word character (alias escape).
-  CMD="$(printf '%s' "$CMD" | sed -E 's/\\([a-zA-Z_])/\1/g')"
-  # Strip the common binary path prefix from the command-name token so
-  # that `/bin/rm` is recognised as `rm` by every command-name regex.
-  # MUST NOT touch operand or redirect-target tokens — see the helper
-  # docstring for the bypass shape this guards against (Codex review
-  # on commit e01df86, bypass A). The previous sed-based fallback for
-  # the start-of-CMD case is preserved so that a CMD whose tokenizer
-  # output is empty (defensively impossible but cheap) still gets the
-  # leading prefix stripped.
-  # Strip surrounding quotes from the command-name token so that
-  # `"rm" /etc/x` / `'rm' /etc/x` / `"/bin/rm" /etc/x` are still
-  # recognised by bare-name detectors. bash strips these quotes at
-  # exec time, invoking the bare binary either way. Must run before
-  # the /bin/-prefix passes so those see the bare path.
-  CMD="$(strip_command_name_quotes "$CMD")"
-  CMD="$(printf '%s' "$CMD" | sed -E 's#^/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/##')"
-  CMD="$(strip_command_name_prefix "$CMD")"
-  # Trim duplicated whitespace introduced by the substitutions.
-  CMD="$(printf '%s' "$CMD" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  CMD=$(normalize_command_view "$CMD")
 
   # --- Build a heredoc-sanitized view for expansion-scans ---
   # $VAR and $(...)/backtick inside a *quoted* heredoc body are literal
@@ -345,13 +321,7 @@ check_single_command() {
   # body bytes into the blanker.
   local CMD_BLANKED
   CMD_BLANKED=$(blank_quoted_heredoc_bodies "$CMD_RAW")
-  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
-  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/(^|[[:space:]])\(+/\1/g; s/\)+($|[[:space:]])/\1/g')"
-  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/\\([a-zA-Z_])/\1/g')"
-  CMD_BLANKED="$(strip_command_name_quotes "$CMD_BLANKED")"
-  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's#^/(usr/local/bin|usr/bin|bin|sbin|usr/sbin)/##')"
-  CMD_BLANKED=$(strip_command_name_prefix "$CMD_BLANKED")
-  CMD_BLANKED="$(printf '%s' "$CMD_BLANKED" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  CMD_BLANKED=$(normalize_command_view "$CMD_BLANKED")
 
   # --- Fail closed on unexpanded $VAR outside single quotes ---
   block_unexpanded_var
