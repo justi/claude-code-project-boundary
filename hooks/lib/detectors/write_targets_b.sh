@@ -248,6 +248,42 @@ run_write_target_detectors_b() {
           pqkind="-L"; pqfile=$(strip_quotes "${pqtok#-L}") ;;
         --log-file=*)
           pqkind="--log-file"; pqfile=$(strip_quotes "${pqtok#--log-file=}") ;;
+        -c|--command)
+          # Codex r5 round-3 P2: the -c value can carry backslash
+          # meta-commands (\o, \g, \gx, \w, \s, \copy, \!) that write
+          # local files or execute shell commands without using -o.
+          # Path payloads after the meta are too fragile to parse
+          # safely from bash — fail-closed on any presence.
+          if [ $((pqi + 1)) -lt $pqn ]; then
+            local pqsql
+            pqsql=$(strip_quotes "${CMD_TOKENS_SCAN[$((pqi + 1))]}")
+            # Note: guard's alias-escape pass strips a backslash before
+            # [a-zA-Z_], so `\o` / `\g` / `\w` / `\s` / `\copy` arrive
+            # as bare `o` / `g` / `w` / `s` / `copy` at the start of the
+            # value. `\!` keeps its backslash (! is non-alphanumeric).
+            # Match either form anchored at the start of the value.
+            if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy|\\!)([[:space:]]|$)'; then
+              echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy / \\!) that writes files or executes shell. Cannot be safely inspected. Ask user for explicit permission." >&2
+              exit 2
+            fi
+            pqi=$((pqi + 1))
+          fi
+          ;;
+        -c?*|--command=*)
+          local pqsql
+          if [[ "$pqtok" == --command=* ]]; then
+            pqsql=$(strip_quotes "${pqtok#--command=}")
+          else
+            pqsql=$(strip_quotes "${pqtok#-c}")
+          fi
+          # See note above: alias-escape pass strips backslash before
+          # alphanumeric, so meta arrives as `o` / `g` / `w` / `s` /
+          # `copy`. `\!` keeps its backslash.
+          if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy|\\!)([[:space:]]|$)'; then
+            echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy / \\!) that writes files or executes shell. Cannot be safely inspected. Ask user for explicit permission." >&2
+            exit 2
+          fi
+          ;;
       esac
       if [ -n "$pqfile" ]; then
         # Codex r5 round-3 P1: a value beginning with `|` is interpreted
