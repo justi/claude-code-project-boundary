@@ -18,8 +18,10 @@ run_write_target_detectors_b() {
   # `docker run --rm -v /tmp:/data alpine tee /data/x.md` deliberately
   # over-blocks because host-mount parsing is not in scope. Substring
   # is the intended fail-closed surface — same reasoning as the rm
-  # walker note in destructive.sh.
-  if echo "$CMD" | grep -qE '(^|[[:space:]])tee($|[[:space:]])'; then
+  # walker note in destructive.sh. Match $CMD_BLANKED so a quoted-
+  # heredoc body that mentions `tee` does not false-positive — Codex
+  # round-4 P3 (sec 99).
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])tee($|[[:space:]])'; then
     local tee_raw
     tee_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])tee[[:space:]]+.*' | sed 's/^[[:space:]]*tee[[:space:]]*//' || true)
 

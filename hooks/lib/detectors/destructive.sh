@@ -133,8 +133,10 @@ run_destructive_detectors() {
   # and `docker run alpine rm /` because host-mount parsing is not in
   # scope. command_name_is would only fire when the verb post-wrapper is
   # `rm`, missing those forms. Substring is the intended fail-closed
-  # surface here.
-  if echo "$CMD" | grep -qE '(^|[[:space:]])rm($|[[:space:]])'; then
+  # surface here. Match $CMD_BLANKED (heredoc bodies wiped) so a
+  # quoted-heredoc body that merely *mentions* `rm` does not trip the
+  # walker — Codex round-4 P3 (sec 99).
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])rm($|[[:space:]])'; then
     # Extract paths from rm command (skip flags)
     local rm_raw
     rm_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rm[[:space:]]+.*' | sed 's/^[[:space:]]*rm[[:space:]]*//' || true)
