@@ -307,4 +307,76 @@ run_permissions_detectors() {
       done < <(tokenize_args "$perm_raw")
     fi
   done
+
+  # --- setfattr: Linux extended attributes (round-5 pentest) ---
+  # Modifies xattrs in user.* / system.* namespaces; an attacker
+  # who can flip these on /etc/shadow can pivot. STRICT.
+  # Grammar: setfattr -n NAME -v VALUE FILE | -x NAME FILE
+  # Value-bearing flags: -n / --name, -v / --value, -x / --remove
+  # (and the `--name=` / `--value=` / `--remove=` long-attached
+  # forms). `--restore=DUMP` uses an embedded value — the FILE
+  # operand list is then empty, so leave that case untouched.
+  if command_name_is "setfattr"; then
+    local sfi=1 sfn=${#CMD_TOKENS_SCAN[@]}
+    local sf_seen_dashdash=0
+    while [ $sfi -lt $sfn ]; do
+      local sftok
+      sftok=$(strip_quotes "${CMD_TOKENS_SCAN[$sfi]}")
+      if [ $sf_seen_dashdash -eq 0 ]; then
+        case "$sftok" in
+          --) sf_seen_dashdash=1; sfi=$((sfi + 1)); continue ;;
+          -n|--name|-v|--value|-x|--remove) sfi=$((sfi + 2)); continue ;;
+          --name=*|--value=*|--remove=*|--restore=*) sfi=$((sfi + 1)); continue ;;
+          -*|'') sfi=$((sfi + 1)); continue ;;
+        esac
+      fi
+      local sfexp sfres
+      sfexp=$(expand_path "$sftok")
+      if [[ "$sfexp" != /* ]]; then
+        sfexp="$EFFECTIVE_CWD/$sfexp"
+      fi
+      sfres=$(resolve_path "$sfexp")
+      if ! is_inside_project "$sfres"; then
+        echo "BLOCKED: 'setfattr' targets '$sfres' which is OUTSIDE project directory. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      sfi=$((sfi + 1))
+    done
+  fi
+
+  # --- chflags: BSD/macOS file flags (round-5 pentest) ---
+  # Modifies uchg/schg/uappnd/etc. flags. Same threat profile
+  # as chmod. STRICT.
+  # Grammar: chflags [-R|-H|-L|-P|-h] FLAGS FILE...
+  # First non-flag positional is FLAGS spec (skip), rest are FILEs.
+  if command_name_is "chflags"; then
+    local cfi=1 cfn=${#CMD_TOKENS_SCAN[@]}
+    local cf_seen_dashdash=0
+    local cf_skipped_flags=0
+    while [ $cfi -lt $cfn ]; do
+      local cftok
+      cftok=$(strip_quotes "${CMD_TOKENS_SCAN[$cfi]}")
+      if [ $cf_seen_dashdash -eq 0 ]; then
+        case "$cftok" in
+          --) cf_seen_dashdash=1; cfi=$((cfi + 1)); continue ;;
+          -*|'') cfi=$((cfi + 1)); continue ;;
+        esac
+      fi
+      if [ $cf_skipped_flags -eq 0 ]; then
+        cf_skipped_flags=1
+        cfi=$((cfi + 1)); continue
+      fi
+      local cfexp cfres
+      cfexp=$(expand_path "$cftok")
+      if [[ "$cfexp" != /* ]]; then
+        cfexp="$EFFECTIVE_CWD/$cfexp"
+      fi
+      cfres=$(resolve_path "$cfexp")
+      if ! is_inside_project "$cfres"; then
+        echo "BLOCKED: 'chflags' targets '$cfres' which is OUTSIDE project directory. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      cfi=$((cfi + 1))
+    done
+  fi
 }
