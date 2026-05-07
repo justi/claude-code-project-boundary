@@ -354,7 +354,7 @@ run_write_target_detectors() {
   # Read-only verbs (x/e w/o -o, l, t, b, h, i) write at most into
   # the existing in-project cwd, which is already bounded by the
   # project-boundary check on EFFECTIVE_CWD.
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(7z|7za|7zr|7zz)([[:space:]]|$)'; then
+  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(7z|7za|7zr|7zz|7zzs)([[:space:]]|$)'; then
     # Pass 1: -o<dir> extraction destination — both attached
     # (`-o<dir>`, no space) and split (`-o <dir>`, space) forms.
     # 7-Zip docs mandate attached, but most builds also accept split,
@@ -428,12 +428,17 @@ run_write_target_detectors() {
     case "$zcmd" in
       a|u|d|rn)
         local zai=$((zci + 1))
+        local zai_seen_dashdash=0
         while [ $zai -lt $zn ]; do
           local zat
           zat=$(strip_quotes "${CMD_TOKENS_SCAN[$zai]}")
-          case "$zat" in
-            -*|'') zai=$((zai + 1)); continue ;;
-          esac
+          if [ $zai_seen_dashdash -eq 0 ]; then
+            case "$zat" in
+              --)
+                zai_seen_dashdash=1; zai=$((zai + 1)); continue ;;
+              -*|'') zai=$((zai + 1)); continue ;;
+            esac
+          fi
           local zaexp
           zaexp=$(expand_path "$zat")
           if [[ "$zaexp" != /* ]]; then
