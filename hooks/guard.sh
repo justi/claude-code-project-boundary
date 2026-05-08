@@ -362,6 +362,7 @@ check_single_command() {
 
   # --- Shell / interpreter execution walkers (lib/shell_exec_walkers.sh) ---
   block_nested_shell_and_eval
+  block_trap_handler
 
   block_interpreter_inline_code
   block_pipe_to_shell

@@ -111,6 +111,32 @@ title
 body with details
 EOF"
 
+# --- textual-arg false-positives ---
+# Documentation / commit messages / echo / printf that mention shell-
+# opener / interpreter patterns as STRING CONTENT, not as exec. The
+# guard's substring walkers (block_nested_shell_and_eval,
+# block_interpreter_inline_code) used to match the pattern anywhere in
+# CMD; gating each on CMD_VERB removes the false-positive without
+# loosening real-exec detection.
+expect_allowed "echo 'avoid bash -c' > docs/fp.md (text content)" \
+  "echo \"avoid bash -c in examples\" > $PROJECT/docs/fp.md"
+expect_allowed "printf 'avoid sh -c\\n' > docs/fp.md (text content)" \
+  "printf 'avoid sh -c in examples\\n' > $PROJECT/docs/fp.md"
+expect_allowed "echo 'do not use eval' > docs/fp.md (text content)" \
+  "echo \"do not use eval here\" > $PROJECT/docs/fp.md"
+expect_allowed "git commit -m 'explain eval risk' (text in -m value)" \
+  "git commit -m \"docs: explain eval risk\""
+expect_allowed "git commit -m 'awk system() caveat' (text in -m value)" \
+  "git commit -m \"docs: awk system caveat\""
+expect_allowed "git commit -m 'docker exec sh -c example' (text in -m value)" \
+  "git commit -m \"docs: docker exec app sh -c example\""
+expect_allowed "echo 'avoid node -e' > docs/fp.md (text content)" \
+  "echo \"avoid node -e examples\" > $PROJECT/docs/fp.md"
+expect_allowed "git commit -m 'avoid python -c' (text in -m value)" \
+  "git commit -m \"docs: avoid python -c examples\""
+expect_allowed "echo 'avoid php -r' > docs/fp.md (text content)" \
+  "echo \"avoid php -r examples\" > $PROJECT/docs/fp.md"
+
 # --- misc safe: env/version probes, file listing, basic queries ---
 expect_allowed "env"                            "env"
 expect_allowed "pwd"                            "pwd"

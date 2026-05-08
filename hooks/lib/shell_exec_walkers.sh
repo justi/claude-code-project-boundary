@@ -32,20 +32,40 @@ block_nested_shell_and_eval() {
   # Also zsh / ksh / dash / fish / xonsh / tcsh / csh / nu / pwsh / osh
   # (macOS ships zsh by default; all accept -c CMD with un-inspectable semantics).
   #
-  # INTENTIONAL ORDERING: this walker runs BEFORE rewrite_remote_dispatch
-  # in check_single_command. That over-blocks remote/container forms
-  # like `docker exec ctr sh -c '...'`, `kubectl exec pod -- bash -c
-  # '...'`, `ssh host bash -c '...'` because the literal `sh -c ` /
-  # `bash -c ` substring matches anywhere in CMD regardless of context.
-  # We accept the over-block: deferring the check to AFTER remote-
-  # dispatch neutralisation would make the boundary easier to abuse via
-  # payloads hidden in pseudo-remote arguments (e.g. an alias that
-  # resolves `docker` to a local script but still parses as `docker
-  # exec ...`). Fail-closed on opaque shell execution before any
-  # command text is rewritten as remote-only is the safer trade-off
-  # for this guard. Path-operand forms (`docker exec ctr rm /etc/x`)
-  # remain ALLOWED via rewrite_remote_dispatch — see the asymmetry
-  # tests in test_true_negatives_b.sh near the docker exec block.
+  # VERB-GATE: substring matching alone false-positives on text-as-arg
+  # cases (`echo "use bash -c here" > docs/fp.md`, `git commit -m
+  # "explain eval risk"`). Gate every check on CMD_VERB so the
+  # substring walker only fires when the verb itself is a shell
+  # opener, an interpreter wrapper that resolves to one (env / sudo /
+  # nice / ... already collapsed by _cn_find_verb_idx — CMD_VERB is
+  # the post-wrapper name), or a remote-dispatch verb where the
+  # asymmetry pin (294b64d / 7b65a45) intentionally over-blocks
+  # inline-shell payloads.
+  #
+  # INTENTIONAL ORDERING: this walker still runs BEFORE
+  # rewrite_remote_dispatch. That is what keeps `docker exec ctr sh
+  # -c '...'`, `kubectl exec pod -- bash -c '...'`, `ssh host bash -c
+  # '...'` blocked: CMD_VERB at this point is still `docker` /
+  # `kubectl` / `ssh`, not yet rewritten away. Deferring the check to
+  # AFTER remote-dispatch neutralisation would make the boundary
+  # easier to abuse via payloads hidden in pseudo-remote arguments
+  # (e.g. an alias that resolves `docker` to a local script but still
+  # parses as `docker exec ...`). Path-operand forms (`docker exec
+  # ctr rm /etc/x`) remain ALLOWED via rewrite_remote_dispatch —
+  # CMD_VERB falls in the `*` branch and the walker returns. See the
+  # asymmetry tests in test_true_negatives_b.sh near the docker exec
+  # block.
+  case "${CMD_VERB-}" in
+    bash|sh|zsh|ksh|dash|fish|xonsh|tcsh|csh|nu|pwsh|osh)
+      ;;  # real shell opener — fall through to the substring check
+    docker|podman|kubectl|oc|crictl|lxc|ssh)
+      ;;  # remote-dispatch verb — asymmetry pin: inline shell payload BLOCK
+    eval)
+      echo "BLOCKED: 'eval' cannot be safely inspected. Ask user for explicit permission." >&2
+      exit 2 ;;
+    *)
+      return ;;  # text-as-arg / unrelated verb — substring is content, not exec
+  esac
   if echo "$CMD" | grep -qE '(^|[[:space:]])(/usr/bin/env[[:space:]]+)?(/bin/)?(bash|sh|zsh|ksh|dash|fish|xonsh|tcsh|csh|nu|pwsh|osh)[[:space:]]+-[a-zA-Z]*c[[:space:]]'; then
     echo "BLOCKED: Nested shell execution ('bash -c' / 'sh -c' / 'zsh -c' / ...) cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2
@@ -55,49 +75,54 @@ block_nested_shell_and_eval() {
     exit 2
   fi
 
-  # --- trap CMD SIG: deferred shell handler (round-4 pentest) ---
-  # `trap CMD SIG` registers CMD as a shell handler that fires on
-  # the named signal (EXIT, INT, TERM, ...). CMD is arbitrary shell
-  # code stored on argv and executed later — same un-inspectable
-  # semantics as `bash -c CMD` and `eval`. Read-only forms have no
-  # deferred CMD and stay ALLOWED:
-  #   trap            (list current traps)
-  #   trap -l         (list signal names)
-  #   trap -p         (print traps in re-input form)
-  #   trap - SIG      (reset SIG to default — first positional `-`)
-  #   trap '' SIG     (ignore SIG — first positional empty)
-  # command_name_is anchors to the verb position so `git commit -m
-  # "fix trap handling"` doesn't false-positive on the substring.
-  if command_name_is "trap"; then
-    local trap_i=1 trap_n=${#CMD_TOKENS_SCAN[@]}
-    local trap_seen_dashdash=0
-    local trap_readonly=0
-    local trap_first_pos=""
-    local trap_first_pos_set=0
-    while [ $trap_i -lt $trap_n ]; do
-      local trap_tok
-      trap_tok=$(strip_quotes "${CMD_TOKENS_SCAN[$trap_i]}")
-      if [ $trap_seen_dashdash -eq 0 ]; then
-        case "$trap_tok" in
-          --)
-            trap_seen_dashdash=1; trap_i=$((trap_i + 1)); continue ;;
-          -l|-p)
-            # `-l` / `-p` make the entire call read-only regardless
-            # of any signal-name args that may follow.
-            trap_readonly=1; break ;;
-        esac
-      fi
-      trap_first_pos="$trap_tok"
-      trap_first_pos_set=1
-      break
-    done
-    if [ "$trap_readonly" -eq 0 ] \
-       && [ "$trap_first_pos_set" -eq 1 ] \
-       && [ -n "$trap_first_pos" ] \
-       && [ "$trap_first_pos" != "-" ]; then
-      echo "BLOCKED: 'trap CMD SIG' deferred shell handler cannot be safely inspected. Ask user for explicit permission." >&2
-      exit 2
+}
+
+# --- trap CMD SIG: deferred shell handler (round-4 pentest) ---
+# `trap CMD SIG` registers CMD as a shell handler that fires on the
+# named signal (EXIT, INT, TERM, ...). CMD is arbitrary shell code
+# stored on argv and executed later — same un-inspectable semantics
+# as `bash -c CMD` and `eval`. Read-only forms have no deferred CMD
+# and stay ALLOWED:
+#   trap            (list current traps)
+#   trap -l         (list signal names)
+#   trap -p         (print traps in re-input form)
+#   trap - SIG      (reset SIG to default — first positional `-`)
+#   trap '' SIG     (ignore SIG — first positional empty)
+# Lifted out of block_nested_shell_and_eval so the verb-gate on the
+# bash -c / eval substring checks does not also bypass this walker —
+# `trap` is its own verb and command_name_is gates correctly.
+block_trap_handler() {
+  if ! command_name_is "trap"; then
+    return
+  fi
+  local trap_i=1 trap_n=${#CMD_TOKENS_SCAN[@]}
+  local trap_seen_dashdash=0
+  local trap_readonly=0
+  local trap_first_pos=""
+  local trap_first_pos_set=0
+  while [ $trap_i -lt $trap_n ]; do
+    local trap_tok
+    trap_tok=$(strip_quotes "${CMD_TOKENS_SCAN[$trap_i]}")
+    if [ $trap_seen_dashdash -eq 0 ]; then
+      case "$trap_tok" in
+        --)
+          trap_seen_dashdash=1; trap_i=$((trap_i + 1)); continue ;;
+        -l|-p)
+          # `-l` / `-p` make the entire call read-only regardless
+          # of any signal-name args that may follow.
+          trap_readonly=1; break ;;
+      esac
     fi
+    trap_first_pos="$trap_tok"
+    trap_first_pos_set=1
+    break
+  done
+  if [ "$trap_readonly" -eq 0 ] \
+     && [ "$trap_first_pos_set" -eq 1 ] \
+     && [ -n "$trap_first_pos" ] \
+     && [ "$trap_first_pos" != "-" ]; then
+    echo "BLOCKED: 'trap CMD SIG' deferred shell handler cannot be safely inspected. Ask user for explicit permission." >&2
+    exit 2
   fi
 }
 
@@ -111,28 +136,45 @@ block_interpreter_inline_code() {
   # view (heredoc bodies stripped) so a tee/cat heredoc whose body merely
   # mentions `python -c`, `awk … system(…)`, etc. is not false-positively
   # rejected.
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(python|python2|python3|perl|ruby|node|nodejs|deno|bun|php|osascript|Rscript)[[:space:]]+(-[a-zA-Z]*[ceE]|--eval|--execute)([[:space:]]|=|$)'; then
-    echo "BLOCKED: Non-shell interpreter with inline code flag cannot be safely inspected. Ask user for explicit permission." >&2
-    exit 2
-  fi
-  # Dedicated PHP rule — `-r`, `-R`, `--run` execute inline code. Cannot
-  # be added to the shared regex above because `-r` is a module-preload
-  # flag in ruby/node (no code execution), so a generic `r` letter would
-  # false-positive on `ruby -r json` / `node -r dotenv`. The matcher
-  # accepts attached forms (`-rcode`, `-Rcode`), quoted-attached
-  # (`-r'code'`), clustered-ending (`-ar`, `-aR`), and the long alias
-  # `--run`. Attached form was originally missed; re-reported by Copilot
-  # review on commit aa6409b.
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])php[[:space:]]+(-[rR][^[:space:]=]*|-[a-zA-Z]*[rR]|--run)([[:space:]]|=|$|'\''|")'; then
-    echo "BLOCKED: 'php -r/-R/--run' inline code cannot be safely inspected. Ask user for explicit permission." >&2
-    exit 2
-  fi
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(g?awk|mawk|nawk)([[:space:]]|$)'; then
-    if echo "$CMD_BLANKED" | grep -qE 'system[[:space:]]*\(|\|[[:space:]]*&?[[:space:]]*"?(sh|bash)'; then
-      echo "BLOCKED: awk program with 'system()' / shell pipe cannot be safely inspected. Ask user for explicit permission." >&2
-      exit 2
-    fi
-  fi
+  #
+  # VERB-GATE: same reasoning as block_nested_shell_and_eval. Substring
+  # walkers without a verb gate false-positive on text-as-arg cases
+  # like `echo "avoid node -e examples" > docs/fp.md` and `git commit
+  # -m "docs: avoid python -c examples"`. Each branch below now gates
+  # on CMD_VERB so the substring check only fires when the verb itself
+  # is the matching interpreter (post-wrapper, post-path-prefix). For
+  # the awk family, `awk` / `gawk` / `mawk` / `nawk` all collapse to a
+  # bare verb name via _cn_strip_path_prefix.
+  case "${CMD_VERB-}" in
+    python|python2|python3|perl|ruby|node|nodejs|deno|bun|osascript|Rscript)
+      if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])(python|python2|python3|perl|ruby|node|nodejs|deno|bun|osascript|Rscript)[[:space:]]+(-[a-zA-Z]*[ceE]|--eval|--execute)([[:space:]]|=|$)'; then
+        echo "BLOCKED: Non-shell interpreter with inline code flag cannot be safely inspected. Ask user for explicit permission." >&2
+        exit 2
+      fi ;;
+    php)
+      # Dedicated PHP rule — `-r`, `-R`, `--run` execute inline code.
+      # Cannot be folded into the python/etc. regex because `-r` is a
+      # module-preload flag in ruby/node (no code execution), so a
+      # generic `r` letter would false-positive on `ruby -r json` /
+      # `node -r dotenv`. The matcher accepts attached forms
+      # (`-rcode`, `-Rcode`), quoted-attached (`-r'code'`), clustered-
+      # ending (`-ar`, `-aR`), and the long alias `--run`.
+      if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])php[[:space:]]+(-[rR][^[:space:]=]*|-[a-zA-Z]*[rR]|--run)([[:space:]]|=|$|'\''|")'; then
+        echo "BLOCKED: 'php -r/-R/--run' inline code cannot be safely inspected. Ask user for explicit permission." >&2
+        exit 2
+      fi
+      # php also accepts -c/--eval inline forms — same regex as the
+      # python branch covers them.
+      if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])php[[:space:]]+(-[a-zA-Z]*[ceE]|--eval|--execute)([[:space:]]|=|$)'; then
+        echo "BLOCKED: Non-shell interpreter with inline code flag cannot be safely inspected. Ask user for explicit permission." >&2
+        exit 2
+      fi ;;
+    awk|gawk|mawk|nawk)
+      if echo "$CMD_BLANKED" | grep -qE 'system[[:space:]]*\(|\|[[:space:]]*&?[[:space:]]*"?(sh|bash)'; then
+        echo "BLOCKED: awk program with 'system()' / shell pipe cannot be safely inspected. Ask user for explicit permission." >&2
+        exit 2
+      fi ;;
+  esac
 }
 
 block_pipe_to_shell() {
