@@ -10,7 +10,7 @@ set -euo pipefail
 # so the sourced `lib/` siblings would be looked up in the wrong
 # directory. Chase the symlink chain to the real file before taking
 # its directory. Portable across Linux and macOS (no `readlink -f`
-# dependency). Reported by Copilot review on PR #15.
+# dependency).
 _guard_source="${BASH_SOURCE[0]}"
 while [ -L "$_guard_source" ]; do
   _guard_target="$(readlink "$_guard_source")"
@@ -139,7 +139,6 @@ ALLOWLIST_BASE_REGEXES=()
 # per session. Compiling glob_to_regex inside the hot loop wastes
 # cycles on identical work across every invocation. Compile once
 # here and reuse the cached regexes in is_allowlisted below.
-# Reported by Copilot review on commit aa6409b (guard.sh:298).
 _awl_i=0
 while [ $_awl_i -lt ${#ALLOWLIST_PATTERNS[@]} ]; do
   _awl_p="${ALLOWLIST_PATTERNS[$_awl_i]}"
@@ -241,44 +240,36 @@ check_single_command() {
     return 0
   fi
 
-  # Snapshot the command BEFORE sudo-strip and any other normalization,
-  # so extract_subcmd_flag_payloads can see the wrapper and its option-
-  # with-value flags (e.g. `sudo -u root tar --to-command='<payload>'`).
-  # The literal sudo-strip below removes only the bare `sudo ` token,
-  # leaving `-u root` behind — which would mis-identify the verb in
-  # the subcmd-flag scan. Reported by Copilot review on PR #23
-  # (guard.sh:897).
+  # Snapshot CMD BEFORE sudo-strip and any other normalization, so
+  # extract_subcmd_flag_payloads can see the wrapper + its option-with-
+  # value flags (e.g. `sudo -u root tar --to-command='<payload>'`).
+  # Sudo-strip below removes only the bare `sudo ` token; leftover
+  # `-u root` would mis-identify the verb in the subcmd-flag scan.
   local _CMD_PRE_STRIP="$CMD"
 
   # --- Strip sudo prefix and its option-with-value pairs ---
-  # Bare `${CMD#sudo }` left orphaned options like `-u root` in front
-  # of the verb, which then mis-led the wrapper-walk in
-  # strip_command_name_prefix / strip_command_name_quotes /
-  # command_name_is — `root` got treated as the verb and the install
-  # / /bin/<name> / "<name>" normalisations all fell through. The
-  # helper below walks sudo's options-with-value (-u USER, --user=USER,
-  # -g GROUP, …) and value-less flags so `sudo -u root install …`
-  # collapses cleanly to `install …` before any downstream walker
-  # runs. env / nice / ionice / timeout / chrt are NOT literal-stripped
-  # — _cn_find_verb_idx (and its _sf_/_rd_ siblings) handle their
-  # opt-with-value pairs in place. Reported by Codex round-4 on PR #23.
+  # Bare `${CMD#sudo }` left orphaned `-u root` in front of the verb,
+  # which mis-led every command-name walker (`root` got treated as the
+  # verb and install / /bin/<name> / "<name>" normalisations fell
+  # through). The helper walks sudo's options-with-value (-u USER,
+  # --user=USER, -g GROUP, …) so `sudo -u root install …` collapses to
+  # `install …` before any downstream walker runs. env / nice / ionice
+  # / timeout / chrt are NOT literal-stripped — _cn_find_verb_idx (and
+  # its _sf_/_rd_ siblings) handle their opt-with-value pairs in place.
   CMD=$(strip_sudo_wrapper_with_opts "$CMD")
   CMD="$(echo "$CMD" | sed 's/^[[:space:]]*//')"
 
   # --- Block shell-opening sudo invocations ---
   # `sudo -i` / `sudo -s` / `sudo --login` / `sudo --shell` open a
   # privileged interactive shell whose subsequent commands cannot be
-  # inspected by this guard — strictly more dangerous than a bare
-  # `bash` invocation, which the existing shell-execute walker
-  # already blocks. _cn_is_sudo_shell_opener also detects clustered
-  # forms (`sudo -ni` / `-in` / `-nis`), quoted forms (`sudo "-i"`),
-  # and outer-wrapper-prefixed forms (`env -u FOO sudo -i`), all of
-  # which Codex round-3 found slipped past the earlier regex. Runs
-  # on _CMD_PRE_STRIP so the original wrapper + sudo + flag layout
-  # is still visible. If empty CMD remains after sudo-strip but the
-  # original was bare `sudo` / `sudo -l` / `sudo -V` / `sudo -v`,
-  # this returns 1 and we fall through to the harmless-empty
-  # ALLOW. Reported by Codex review rounds 2–3 on PR #24 (P2).
+  # inspected — strictly more dangerous than bare `bash`, which the
+  # shell-execute walker already blocks. _cn_is_sudo_shell_opener also
+  # catches clustered (`sudo -ni`, `-in`, `-nis`), quoted (`sudo "-i"`),
+  # and outer-wrapper-prefixed (`env -u FOO sudo -i`) forms. Runs on
+  # _CMD_PRE_STRIP so the original wrapper + sudo + flag layout is still
+  # visible; if CMD is empty after sudo-strip but the original was bare
+  # `sudo` / `sudo -l` / `-V` / `-v`, this returns 1 and we fall through
+  # to the harmless-empty ALLOW.
   if _cn_is_sudo_shell_opener "$_CMD_PRE_STRIP"; then
     echo "BLOCKED: 'sudo -i' / 'sudo -s' / 'sudo --login' / 'sudo --shell' (also clustered like -ni / -nis, quoted, or wrapper-prefixed) opens a privileged interactive shell whose subsequent commands cannot be inspected. Ask user for explicit permission." >&2
     exit 2

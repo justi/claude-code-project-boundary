@@ -189,7 +189,6 @@ strip_command_name_quotes() {
   # (rm, mv, cp, ln, chmod, chown, tee, curl, wget, find, sed,
   # truncate, rsync) past the guard. Walks tokens using the same
   # wrapper / env-var / flag skipping rules as strip_command_name_prefix.
-  # Reported by Copilot review on commit 22112ba (guard.sh:1078, 1503).
   local cmd="$1"
   local -a toks=()
   while IFS= read -r t; do
@@ -277,8 +276,6 @@ command_name_is() {
 # tokenize_args preserves quote bytes, so reconstruction with single-
 # space joins keeps quoted operands intact (whitespace inside the
 # command is normalised in the next pass anyway — guard.sh:280).
-#
-# Reported by Codex review round-4 on PR #23 (out-of-scope follow-up).
 strip_sudo_wrapper_with_opts() {
   local cmd="$1"
   case "$cmd" in

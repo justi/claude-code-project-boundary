@@ -39,25 +39,20 @@ run_write_target_detectors() {
   if command_name_is install; then
     local install_raw
     install_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//' || true)
-    # Track whether the previous token was a flag whose VALUE we must
-    # skip on the next iteration. The previous walker also skipped any
-    # token matching the mode regex ^[0-9]+$ or owner[:group] regex
-    # ^[a-zA-Z_][a-zA-Z0-9_]*(:...)?$ unconditionally — that
-    # discarded legitimate file operands whose bare name happened to
-    # match (e.g. `install src 0755`, `install src root_wheel`),
-    # and when EFFECTIVE_CWD sat outside the project the unvalidated
-    # destination became a boundary bypass. install grammar puts
-    # mode/owner/group ONLY as the value of -m/--mode / -o/--owner /
-    # -g/--group, so positional skipping is safe to remove once the
-    # flag-value pairs are tracked explicitly.
-    # Reported by Copilot review on commit b6de687 (write_targets.sh:47).
+    # Skip the next token when the current one is a value-bearing flag
+    # (-m/--mode, -o/--owner, -g/--group). An earlier walker skipped
+    # tokens matching mode regex ^[0-9]+$ or owner[:group] regex
+    # unconditionally — that discarded legitimate file operands whose
+    # bare name happened to match (e.g. `install src 0755`,
+    # `install src root_wheel`) and became a boundary bypass when
+    # EFFECTIVE_CWD sat outside the project. install grammar puts
+    # mode/owner/group ONLY as the value of those flags, so explicit
+    # pair-tracking is safe.
     #
     # POSIX `--` end-of-options is also tracked: after the terminator,
     # every token is a positional operand even when its name begins
     # with `-`. Without this, a file operand like `-owned` slipped
     # past the flag-skip case and never reached is_inside_project.
-    # Same shape as the rsync POSIX `--` fix in this branch.
-    # Reported by Copilot review on commit c4a70e0 (write_targets.sh:67).
     local install_skip_next=0
     local install_seen_dashdash=0
     while IFS= read -r TARGET; do
@@ -67,19 +62,13 @@ run_write_target_detectors() {
       fi
       [[ -z "$TARGET" ]] && continue
       # Strip quotes for every flag test so `"--help"` and `--help`
-      # behave identically (bash strips quotes at exec time). For
-      # the attached form `--name=value` the walker only validates
-      # the value when name is on the WHITE-LIST of options that
-      # actually point at a write target — currently
-      # `--target-directory=`. All other -* tokens (including
-      # `--mode=`, `--owner=`, `--group=`, etc.) are skipped as
-      # flags — their values aren't paths, and even when they
-      # syntactically look like one (e.g. `--mode=/0644`), they
-      # never become a write destination. The white-list approach
-      # replaced an earlier
-      # `=*/*` heuristic that both missed relative values and
-      # over-matched benign options carrying `/` (Codex review on
-      # commit f76ec34, write_targets.sh:100 + 161).
+      # behave identically (bash strips quotes at exec time). The
+      # attached form `--name=value` is validated only when `name`
+      # is on a white-list of options that actually point at a write
+      # target — currently `--target-directory=`. All other -*
+      # tokens (--mode=, --owner=, --group=, ...) are skipped as
+      # flags; their values are not paths even when syntactically
+      # path-shaped (e.g. `--mode=/0644`).
       if [ $install_seen_dashdash -eq 0 ]; then
         local install_tok
         install_tok=$(strip_quotes "$TARGET")
@@ -161,10 +150,7 @@ run_write_target_detectors() {
     # positional operand even when its name begins with `-`. Without
     # this, a file operand like `-owned` slipped past the
     # `[[ "$TARGET" == -* ]] && continue` flag-skip and never
-    # reached is_inside_project. Same shape as the sed-i and
-    # truncate POSIX `--` fix shipped in PR #12 for those two
-    # walkers. Reported by Copilot review on commit b6de687
-    # (write_targets.sh:66).
+    # reached is_inside_project.
     local rsync_seen_dashdash=0
     while IFS= read -r TARGET; do
       [[ -z "$TARGET" ]] && continue
@@ -183,9 +169,7 @@ run_write_target_detectors() {
         # --rsync-path=REMOTE_BIN, --read-batch=PATH (read-only),
         # and the read-only --*-from= filter file flags are
         # skipped as ordinary flags so the detector does not
-        # over-match (Codex review on commit f76ec34,
-        # write_targets.sh:161, with --write-batch=/--only-write-
-        # batch= added per Codex review on commit 00d7300).
+        # over-match.
         local rsync_tok
         rsync_tok=$(strip_quotes "$TARGET")
         if [ "$rsync_tok" = "--" ]; then
@@ -208,7 +192,7 @@ run_write_target_detectors() {
       #   rsync://host/path   (URL form)
       # A local path may legitimately contain `:` AFTER a slash
       # (e.g. `../tmp/a:b`); a raw `=~ :` test would skip it and bypass
-      # the boundary check. Reported by Copilot review on PR #137.
+      # the boundary check.
       case "$TARGET" in
         rsync://*) continue ;;
       esac

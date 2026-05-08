@@ -314,7 +314,6 @@ extract_subcmd_flag_payloads() {
       # `core.sshCommand`); enable nocasematch around the regex test
       # so case-folded variants are not a bypass route. Save / restore
       # the previous state to avoid leaking the option to callers.
-      # Reported by Copilot review on PR #23 (subcmd_flags.sh:203).
       local _sf_nocase_was_on=0
       shopt -q nocasematch && _sf_nocase_was_on=1
       shopt -s nocasematch
@@ -332,7 +331,7 @@ extract_subcmd_flag_payloads() {
   # `git config [opts] <key> <value>` — alternative assignment form
   # of git's exec-sink config keys (same key regex, different shape
   # than the `-c` flag). Run after the main walk so the `-c` flow
-  # is unaffected. Reported by Codex review round-3 on PR #23.
+  # is unaffected.
   if [ "$verb" = "git" ] && [ "$sink_kind" = "git-config" ]; then
     _sf_try_git_config_form "$verb_idx" "$sink_key_regex"
   fi
