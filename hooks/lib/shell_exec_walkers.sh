@@ -31,6 +31,21 @@ block_nested_shell_and_eval() {
   # Match: bash -c, sh -c, bash -lc, bash -ec, /bin/bash -c, /bin/sh -c, /usr/bin/env bash -c
   # Also zsh / ksh / dash / fish / xonsh / tcsh / csh / nu / pwsh / osh
   # (macOS ships zsh by default; all accept -c CMD with un-inspectable semantics).
+  #
+  # INTENTIONAL ORDERING: this walker runs BEFORE rewrite_remote_dispatch
+  # in check_single_command. That over-blocks remote/container forms
+  # like `docker exec ctr sh -c '...'`, `kubectl exec pod -- bash -c
+  # '...'`, `ssh host bash -c '...'` because the literal `sh -c ` /
+  # `bash -c ` substring matches anywhere in CMD regardless of context.
+  # We accept the over-block: deferring the check to AFTER remote-
+  # dispatch neutralisation would make the boundary easier to abuse via
+  # payloads hidden in pseudo-remote arguments (e.g. an alias that
+  # resolves `docker` to a local script but still parses as `docker
+  # exec ...`). Fail-closed on opaque shell execution before any
+  # command text is rewritten as remote-only is the safer trade-off
+  # for this guard. Path-operand forms (`docker exec ctr rm /etc/x`)
+  # remain ALLOWED via rewrite_remote_dispatch — see the asymmetry
+  # tests in test_true_negatives_b.sh near the docker exec block.
   if echo "$CMD" | grep -qE '(^|[[:space:]])(/usr/bin/env[[:space:]]+)?(/bin/)?(bash|sh|zsh|ksh|dash|fish|xonsh|tcsh|csh|nu|pwsh|osh)[[:space:]]+-[a-zA-Z]*c[[:space:]]'; then
     echo "BLOCKED: Nested shell execution ('bash -c' / 'sh -c' / 'zsh -c' / ...) cannot be safely inspected. Ask user for explicit permission." >&2
     exit 2

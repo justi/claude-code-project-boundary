@@ -387,6 +387,20 @@ expect_allowed "docker exec running tee inside container" \
 expect_allowed "podman exec running mv inside container" \
   "podman exec mycontainer mv /etc/a /etc/b"
 
+# D-asymmetry) docker exec + sh -c is INTENTIONALLY blocked.
+# rewrite_remote_dispatch neutralises operands of remote-dispatch
+# verbs, so plain path forms (D above) are ALLOWED. But
+# block_nested_shell_and_eval runs BEFORE the rewrite and matches
+# `sh -c ` / `bash -c ` as a raw substring on the original CMD —
+# remote/container forms with an inline shell payload trip that
+# walker. Fail-closed over-block, not a bypass. See the comment on
+# block_nested_shell_and_eval in shell_exec_walkers.sh for why this
+# ordering is preserved.
+expect_allowed "docker exec ctr rm -rf /tmp/x (path operand neutralised)" \
+  "docker exec ctr rm -rf /tmp/pb_escape_target"
+expect_blocked "docker exec ctr sh -c '...' (intentional fail-closed over-block)" \
+  "docker exec ctr sh -c 'rm -rf /tmp/pb_escape_target'"
+
 # E) docker / podman run — NOT collapsed (bind mounts can surface host
 # paths into the container; collapsing would let `-v /tmp:/data alpine
 # tee /data/x.md` write to host /tmp without a boundary check). The
