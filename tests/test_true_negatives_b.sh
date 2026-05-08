@@ -420,6 +420,11 @@ expect_allowed "kubectl exec rm inside pod" \
 expect_allowed "kubectl exec -c container rm" \
   "kubectl exec mypod -c app -- rm -rf /tmp/x"
 
+# Same intentional over-block as docker exec + sh -c above: the shell
+# opener is detected before remote-dispatch neutralisation.
+expect_blocked "kubectl exec sh -c '...' (intentional fail-closed over-block)" \
+  "kubectl exec deploy/app -- sh -c 'rm -rf /tmp/pb_escape_target'"
+
 expect_allowed "oc exec rm inside pod" \
   "oc exec mypod -- rm -rf /var/cache"
 
