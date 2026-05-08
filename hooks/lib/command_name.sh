@@ -225,25 +225,31 @@ strip_command_name_quotes() {
 
 command_name_is() {
   # Return 0 iff the post-wrapper command-name token of $CMD equals $1.
-  # Walks $CMD tokens using the same rules as strip_command_name_prefix:
-  # skip `timeout <dur>`, sudo/env/nice/nohup/time/stdbuf/ionice/chrt/
-  # taskset/command/builtin/exec wrappers (and their option-with-value
-  # pairs like `-u USER`, `-k DUR`), VAR=val environment prefixes
-  # and -flag tokens. Any /bin/, /sbin/, /usr/bin/, /usr/sbin/,
-  # /usr/local/bin/ prefix on the command-name token is stripped before
-  # comparison, so `/usr/bin/install` is recognised as `install`.
+  # Reads CMD_VERB from the caller's dynamic scope when available — set
+  # by check_single_command after CMD normalisation and refreshed after
+  # remote_dispatch rewrite, so every detector inside that pipeline gets
+  # an O(1) string compare instead of a per-call tokenize-and-walk
+  # (Codex round-5 finding #3; ~64 call sites per command).
   #
-  # Why: several detectors (install, rsync, ...) use a bare
-  # `(^|[[:space:]])CMDNAME($|[[:space:]])` regex that matches the
-  # word anywhere in the command. For common names that are also
-  # package-manager subcommands (npm install / bundle install /
-  # poetry install / etc.) this produces false positives. Use this
-  # helper to require the actual command-name position.
+  # When CMD_VERB is unset (test harnesses or callers outside the main
+  # check_single_command pipeline), falls back to the tokenize-and-walk
+  # path — same logic as strip_command_name_prefix:
+  #   skip `timeout <dur>`, sudo/env/nice/nohup/time/stdbuf/ionice/chrt/
+  #   taskset/command/builtin/exec wrappers (and their option-with-value
+  #   pairs like `-u USER`, `-k DUR`), VAR=val environment prefixes,
+  #   and -flag tokens. Any /bin/, /sbin/, /usr/bin/, /usr/sbin/,
+  #   /usr/local/bin/, /opt/homebrew/bin/ prefix is stripped before
+  #   comparison.
   #
-  # IMPORTANT: reads $CMD from the caller's dynamic scope (bash
-  # `local` semantics). Callers MUST run inside check_single_command
-  # (or any other context that has a local CMD in scope).
+  # Why bare-name regex isn't enough: several detectors (install, rsync,
+  # ...) match a verb anywhere in CMD; that false-positives on package-
+  # manager subcommands like `npm install` / `bundle install`. This
+  # helper requires the actual command-name position.
   local target=$1
+  if [ -n "${CMD_VERB-}" ]; then
+    [ "$CMD_VERB" = "$target" ]
+    return
+  fi
   local -a toks=()
   while IFS= read -r t; do
     [[ -z "$t" ]] && continue
@@ -258,6 +264,30 @@ command_name_is() {
   t=$(strip_quotes "${toks[$idx]}")
   t=$(_cn_strip_path_prefix "$t")
   [ "$t" = "$target" ]
+}
+
+# --- Compute the post-normalisation verb name for a command string ---
+# Tokenises once, walks _cn_find_verb_idx, strips any binary-path
+# prefix. Returns empty when no verb is recognised. Used by
+# check_single_command to fill the CMD_VERB cache that command_name_is
+# reads on every call. Cheaper than calling command_name_is once per
+# detector — collapses the per-detector tokenize work into a single
+# pass per command (and one refresh after remote_dispatch rewrite).
+_cn_compute_verb_name() {
+  local cmd="$1"
+  local -a toks=()
+  local _t
+  while IFS= read -r _t; do
+    [[ -z "$_t" ]] && continue
+    toks+=("$_t")
+  done < <(tokenize_args "$cmd")
+  local idx
+  idx=$(_cn_find_verb_idx)
+  [ "$idx" -lt 0 ] && return
+  local verb
+  verb=$(strip_quotes "${toks[$idx]}")
+  verb=$(_cn_strip_path_prefix "$verb")
+  printf '%s' "$verb"
 }
 
 # --- Strip leading `sudo` plus its option-with-value pairs from CMD ---

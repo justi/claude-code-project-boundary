@@ -298,6 +298,16 @@ check_single_command() {
   # operates on the normalized CMD too, so paths are not mangled.
   CMD=$(normalize_command_view "$CMD")
 
+  # --- Cache the post-normalisation verb name ---
+  # command_name_is is called ~64× per check_single_command (once per
+  # detector that gates on a verb). Without a cache each call would
+  # re-tokenise CMD and re-walk wrappers. CMD_VERB is read by
+  # command_name_is via dynamic scope; refreshed after rewrite_remote_
+  # dispatch below because that rewrite can change the visible verb
+  # (e.g. by stripping the ssh wrapper). Codex round-5 finding #3.
+  local CMD_VERB
+  CMD_VERB=$(_cn_compute_verb_name "$CMD")
+
   # --- Build a heredoc-sanitized view for expansion-scans ---
   # $VAR and $(...)/backtick inside a *quoted* heredoc body are literal
   # bytes written to the heredoc's stdin target, not shell expansions.
@@ -377,6 +387,10 @@ check_single_command() {
   CMD_BLANKED=$(rewrite_remote_dispatch "$CMD_BLANKED")
   fill_tokens_from CMD_TOKENS "$CMD"
   fill_tokens_from CMD_TOKENS_SCAN "$CMD_BLANKED"
+  # Refresh the verb cache: rewrite_remote_dispatch can drop or rewrite
+  # the wrapper (e.g. `ssh host "rm /etc/x"` becomes `ssh host`), which
+  # changes what command_name_is sees.
+  CMD_VERB=$(_cn_compute_verb_name "$CMD")
 
   # --- Validate argument-as-command flag values recursively ---
   # Tools like `tar --to-command=<cmd>` / `rsync -e <cmd>` /
