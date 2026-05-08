@@ -14,14 +14,19 @@ run_redirect_detectors() {
   local TARGET RESOLVED
 
   # --- tee command: extract file arguments, block if outside project ---
-  # NOTE: kept as raw substring regex (NOT command_name_is) by design.
-  # `docker run --rm -v /tmp:/data alpine tee /data/x.md` deliberately
-  # over-blocks because host-mount parsing is not in scope. Substring
-  # is the intended fail-closed surface — same reasoning as the rm
-  # walker note in destructive.sh. Match $CMD_BLANKED so a quoted-
-  # heredoc body that mentions `tee` does not false-positive — Codex
-  # round-4 P3 (sec 99).
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])tee($|[[:space:]])'; then
+  # Substring regex (NOT command_name_is) by design for the wrapper-
+  # carry case: `docker run --rm -v /tmp:/data alpine tee /data/x.md`
+  # deliberately over-blocks because host-mount parsing is not in
+  # scope. CMD_BLANKED so a quoted-heredoc body that mentions `tee`
+  # is not tripped — Codex round-4 P3 (sec 99).
+  #
+  # VERB-GATE on a positive list — same reasoning as the rm walker in
+  # destructive.sh. tee itself + remote-dispatch wrappers (docker /
+  # podman / kubectl / oc / crictl / lxc / ssh / nsenter / chroot) +
+  # xargs (tee-by-input). Other verbs (git / gh / echo / printf /
+  # ...) skip — substring is text content.
+  if [[ "${CMD_VERB-}" =~ ^(tee|docker|podman|kubectl|oc|crictl|lxc|ssh|nsenter|chroot|xargs)$ ]] && \
+     echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])tee($|[[:space:]])'; then
     local tee_raw
     tee_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])tee[[:space:]]+.*' | sed 's/^[[:space:]]*tee[[:space:]]*//' || true)
 

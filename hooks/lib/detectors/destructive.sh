@@ -128,15 +128,24 @@ run_destructive_detectors() {
   fi
 
   # --- File deletion: allowed inside project, blocked outside ---
-  # NOTE: kept as raw substring regex (NOT command_name_is) by design.
-  # Some tests deliberately over-block `nsenter rm /etc/x`, `chroot rm`,
-  # and `docker run alpine rm /` because host-mount parsing is not in
-  # scope. command_name_is would only fire when the verb post-wrapper is
-  # `rm`, missing those forms. Substring is the intended fail-closed
-  # surface here. Match $CMD_BLANKED (heredoc bodies wiped) so a
-  # quoted-heredoc body that merely *mentions* `rm` does not trip the
-  # walker — Codex round-4 P3 (sec 99).
-  if echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])rm($|[[:space:]])'; then
+  # Substring regex (NOT command_name_is) by design for the wrapper-
+  # carry case: `nsenter rm /etc/x`, `chroot rm /etc/x`, `docker run
+  # alpine rm /` deliberately over-block because host-mount parsing
+  # is not in scope. command_name_is would only fire on a post-wrapper
+  # `rm` verb and miss those forms. CMD_BLANKED (heredoc bodies wiped)
+  # so a quoted-heredoc body that merely mentions `rm` is not tripped —
+  # Codex round-4 P3 (sec 99).
+  #
+  # VERB-GATE on a positive list of verbs that can legitimately host an
+  # `rm` argument: rm itself + remote-dispatch wrappers (docker /
+  # podman / kubectl / oc / crictl / lxc / ssh / nsenter / chroot) +
+  # xargs (rm-by-input). Other verbs (git / gh / echo / printf / cat /
+  # ...) skip: substring `rm` in their args is content of a commit
+  # message / tag annotation / PR body / docs file, not a real exec.
+  # The gate keeps the wrapper-carry over-block intact while removing
+  # the false-positive on text-as-arg in metadata-bearing tooling.
+  if [[ "${CMD_VERB-}" =~ ^(rm|docker|podman|kubectl|oc|crictl|lxc|ssh|nsenter|chroot|xargs)$ ]] && \
+     echo "$CMD_BLANKED" | grep -qE '(^|[[:space:]])rm($|[[:space:]])'; then
     # Extract paths from rm command (skip flags)
     local rm_raw
     rm_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rm[[:space:]]+.*' | sed 's/^[[:space:]]*rm[[:space:]]*//' || true)

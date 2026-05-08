@@ -137,6 +137,72 @@ expect_allowed "git commit -m 'avoid python -c' (text in -m value)" \
 expect_allowed "echo 'avoid php -r' > docs/fp.md (text content)" \
   "echo \"avoid php -r examples\" > $PROJECT/docs/fp.md"
 
+# --- destructive verb names mentioned in metadata text-as-arg ---
+# rm / tee walkers used to fire on substring match anywhere in CMD,
+# overblocking commit messages / tag annotations / git notes / gh PR
+# bodies that merely mention the verb name. Verb-gate them on a
+# positive list (rm / tee themselves + remote-dispatch wrappers that
+# legitimately carry foreign-fs rm/tee invocations).
+expect_allowed "git commit -m mentions rm" \
+  "git commit -m \"docs: mention rm /etc/passwd\""
+expect_allowed "git commit -m mentions tee" \
+  "git commit -m \"docs: mention tee /etc/app.conf\""
+expect_allowed "git tag -a annotated mentions rm" \
+  "git tag -a v-test -m \"mention rm /etc/passwd\""
+expect_allowed "git tag -a annotated mentions tee" \
+  "git tag -a v-test -m \"mention tee /etc/app.conf\""
+expect_allowed "git notes add mentions rm" \
+  "git notes add -m \"mention rm /etc/passwd\""
+expect_allowed "git notes add mentions tee" \
+  "git notes add -m \"mention tee /etc/app.conf\""
+expect_allowed "gh pr comment body mentions rm" \
+  "gh pr comment 1 --body \"mention rm /etc/passwd\""
+expect_allowed "gh pr comment body mentions tee" \
+  "gh pr comment 1 --body \"mention tee /etc/app.conf\""
+
+# --- psql bare meta-commands with no file argument ---
+# psql -c '\g' is send-query (alias of ;), no file. psql -c '\o'
+# without an argument resets the output redirection to stdout.
+# Neither writes a local file. The walker used to fail-closed on the
+# meta name regardless of arg shape; refined to allow the bare form
+# (meta with no payload after).
+expect_allowed "psql -c bare \\g (send query, no file)" \
+  "psql -c '\\g'"
+expect_allowed "psql -c bare \\o (reset output to stdout)" \
+  "psql -c '\\o'"
+expect_allowed "psql -c bare \\gx (send + expanded display)" \
+  "psql -c '\\gx'"
+expect_allowed "psql -c bare \\s (history to stdout)" \
+  "psql -c '\\s'"
+expect_allowed "psql --command attached bare \\g" \
+  "psql --command='\\g'"
+
+# --- alias variants (--message / --title / --notes / --comment / ---
+# --description / --body) — same metadata-text class as -m / --body
+# above. Covered by the rm/tee verb-gate (verb=git/gh, walker skips).
+# Pinned to keep the verb-gate in place if anyone tightens the
+# walker again.
+expect_allowed "git commit --message rm" \
+  "git commit --message \"mention rm /etc/passwd\""
+expect_allowed "git tag -a v --message tee" \
+  "git tag -a v2 --message \"mention tee /etc/app.conf\""
+expect_allowed "git notes add --message rm" \
+  "git notes add --message \"mention rm /etc/passwd\""
+expect_allowed "git merge --message rm main" \
+  "git merge --message \"mention rm /etc/passwd\" main"
+expect_allowed "gh pr create --title rm" \
+  "gh pr create --title \"mention rm /etc/passwd\" --body \"body\""
+expect_allowed "gh pr create --body tee" \
+  "gh pr create --title \"title\" --body \"mention tee /etc/app.conf\""
+expect_allowed "gh pr review --comment rm" \
+  "gh pr review 1 --comment --body \"mention rm /etc/passwd\""
+expect_allowed "gh issue comment --body rm" \
+  "gh issue comment 1 --body \"mention rm /etc/passwd\""
+expect_allowed "gh release create --notes rm" \
+  "gh release create v1 --notes \"mention rm /etc/passwd\""
+expect_allowed "gh repo edit --description tee" \
+  "gh repo edit --description \"mention tee /etc/app.conf\""
+
 # --- misc safe: env/version probes, file listing, basic queries ---
 expect_allowed "env"                            "env"
 expect_allowed "pwd"                            "pwd"

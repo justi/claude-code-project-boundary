@@ -80,8 +80,25 @@ run_db_dump_detectors() {
             # `\o/tmp/out` and `\o|cmd` — extend the separator class
             # to cover `/` (path attached) and `|` (pipe attached) and
             # `\\` (next meta attached) on top of whitespace.
-            if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy|\\!)([[:space:]/|\\]|$)'; then
-              echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy / \\!) that writes files or executes shell. Cannot be safely inspected. Ask user for explicit permission." >&2
+            # \! always opens an interactive shell or executes attached
+            # shell command — fail-closed regardless of arg shape.
+            if echo "$pqsql" | grep -qE '^\\!'; then
+              echo "BLOCKED: 'psql -c' contains the \\! meta-command which executes a shell. Cannot be safely inspected. Ask user for explicit permission." >&2
+              exit 2
+            fi
+            # \o / \g / \gx / \w / \s / \copy with an ATTACHED payload —
+            # space + non-space (split file path), `/` (path attached),
+            # `|` (pipe attached), or `\` (next meta attached) — write
+            # or read a file we cannot validate. Bare meta with no
+            # payload is read-only / send-and-go and stays ALLOWED:
+            #   \g    send query (alias of ;)
+            #   \o    reset output to stdout
+            #   \gx   send query, expanded display
+            #   \w    error without arg, no side effect
+            #   \s    print history to stdout (no arg = stdout)
+            #   \copy error without args
+            if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy)([[:space:]]+[^[:space:]]|/|\||\\)'; then
+              echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy) with a file or pipe payload. Cannot be safely inspected. Ask user for explicit permission." >&2
               exit 2
             fi
             pqi=$((pqi + 1))
@@ -100,8 +117,15 @@ run_db_dump_detectors() {
             echo "BLOCKED: 'psql -c' value uses ANSI-C quoting (\$'...') which can encode arbitrary escape sequences. Cannot be safely inspected. Ask user for explicit permission." >&2
             exit 2
           fi
-          if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy|\\!)([[:space:]/|\\]|$)'; then
-            echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy / \\!) that writes files or executes shell. Cannot be safely inspected. Ask user for explicit permission." >&2
+          # \! always opens a shell — fail-closed regardless of arg shape.
+          if echo "$pqsql" | grep -qE '^\\!'; then
+            echo "BLOCKED: 'psql -c' contains the \\! meta-command which executes a shell. Cannot be safely inspected. Ask user for explicit permission." >&2
+            exit 2
+          fi
+          # \o / \g / \gx / \w / \s / \copy with an attached payload only —
+          # bare forms have no file write side-effect and stay ALLOWED.
+          if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy)([[:space:]]+[^[:space:]]|/|\||\\)'; then
+            echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy) with a file or pipe payload. Cannot be safely inspected. Ask user for explicit permission." >&2
             exit 2
           fi
           ;;
