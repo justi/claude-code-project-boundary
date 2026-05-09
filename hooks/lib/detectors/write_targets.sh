@@ -342,11 +342,33 @@ run_write_target_detectors() {
   # the existing in-project cwd, which is already bounded by the
   # project-boundary check on EFFECTIVE_CWD.
   if command_name_matches "7z|7za|7zr|7zz|7zzs"; then
+    # Pre-pass: locate verb (first non-flag positional after binary).
+    # The verb gates Pass 1 (-o<dir>) and Pass 1b (-w<path>): for
+    # read-only verbs (l/t/h/i/b) -o is unused (no extraction) and -w
+    # is unused (no temp work). Previously these passes ran for every
+    # verb and false-positived `7z l archive.7z -o/tmp` and
+    # `7z t archive.7z -o/tmp`.
+    local zn=${#CMD_TOKENS_SCAN[@]}
+    local zci=1 zcmd=""
+    while [ $zci -lt $zn ]; do
+      local zct
+      zct=$(strip_quotes "${CMD_TOKENS_SCAN[$zci]}")
+      case "$zct" in
+        -*|'') zci=$((zci + 1)); continue ;;
+        *)     zcmd="$zct"; break ;;
+      esac
+    done
+    local z_readonly_verb=0
+    case "$zcmd" in
+      l|t|h|i|b) z_readonly_verb=1 ;;
+    esac
+
     # Pass 1: -o<dir> extraction destination — both attached
     # (`-o<dir>`, no space) and split (`-o <dir>`, space) forms.
     # 7-Zip docs mandate attached, but most builds also accept split,
     # so fail-closed covers both.
-    local zi=1 zn=${#CMD_TOKENS_SCAN[@]}
+    if [ "$z_readonly_verb" -eq 0 ]; then
+    local zi=1
     while [ $zi -lt $zn ]; do
       local ztok
       ztok=$(strip_quotes "${CMD_TOKENS_SCAN[$zi]}")
@@ -379,17 +401,9 @@ run_write_target_detectors() {
       [ -n "$wdir" ] && validate_command_path write "7z -w<path>" "$wdir"
       wzi=$((wzi + 1))
     done
-    # Pass 2: locate verb (first non-flag positional after binary) and,
-    # if it's a write-mode verb, validate the next positional as ARCHIVE.
-    local zci=1 zcmd=""
-    while [ $zci -lt $zn ]; do
-      local zct
-      zct=$(strip_quotes "${CMD_TOKENS_SCAN[$zci]}")
-      case "$zct" in
-        -*|'') zci=$((zci + 1)); continue ;;
-        *)     zcmd="$zct"; break ;;
-      esac
-    done
+    fi
+    # Pass 2: if verb is a write-mode verb, validate the next positional
+    # as ARCHIVE. zci/zcmd were already resolved in the pre-pass above.
     case "$zcmd" in
       a|u|d|rn)
         local zai=$((zci + 1))

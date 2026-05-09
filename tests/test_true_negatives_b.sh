@@ -660,3 +660,30 @@ expect_blocked "unzip -o -d /tmp archive (extract overwrite still blocked)" \
   "unzip -o archive.zip -d /tmp"
 
 echo ""
+
+# ============================================================
+# 7z -o<dir>/-w<path> skipped for read-only verbs (l/t/h/i/b)
+# ------------------------------------------------------------
+# `7z l archive.7z -o/tmp` and `7z t archive.7z -o/tmp` list
+# and test the archive — neither extracts to -o<dir> nor uses
+# -w<path>. The walker previously validated -o/-w for every
+# verb and false-positived these.
+# ============================================================
+echo "--- 7z read-only verbs (-o / -w skipped) ---"
+
+expect_allowed "7z l archive.7z -o/tmp (list)" \
+  "7z l archive.7z -o/tmp"
+expect_allowed "7z t archive.7z -o/tmp (test)" \
+  "7z t archive.7z -o/tmp"
+expect_allowed "7z h archive.7z -o/tmp (hash)" \
+  "7z h archive.7z -o/tmp"
+expect_allowed "7z l archive.7z -w/tmp (list, -w ignored)" \
+  "7z l archive.7z -w/tmp"
+
+# Write verbs MUST still block -o<dir> outside.
+expect_blocked "7z x archive.7z -o/tmp (extract still blocked)" \
+  "7z x archive.7z -o/tmp"
+expect_blocked "7z e archive.7z -o/tmp (extract-flat still blocked)" \
+  "7z e archive.7z -o/tmp"
+
+echo ""
