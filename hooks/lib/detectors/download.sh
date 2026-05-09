@@ -38,5 +38,18 @@ run_download_detectors() {
       is_discard_target "$resolved_wget" && continue
       block_unless_path_allowed write "wget output file" "$resolved_wget"
     done < <(extract_option_values "-O" "--output-document" || true)
+
+    # wget -P / --directory-prefix DIR prepends DIR to the URL-derived
+    # output filename. Without -O, every downloaded file lands under DIR;
+    # an outside-project DIR is a real boundary write. The -O walker
+    # above does not cover this — `wget -P /tmp URL` slipped through
+    # entirely (cd_destructive_walker comment at lib/cd_destructive_walker.sh
+    # already flagged this gap for allowlisted-cwd, but the unguarded
+    # in-project case was never wired up).
+    local wget_pdir
+    while IFS= read -r wget_pdir; do
+      [ -z "$wget_pdir" ] && continue
+      validate_command_path write "wget -P" "$wget_pdir"
+    done < <(extract_option_values "-P" "--directory-prefix" || true)
   fi
 }
