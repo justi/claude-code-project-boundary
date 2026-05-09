@@ -632,3 +632,31 @@ expect_blocked "tar -C /tmp -xf archive (any order, extract)" \
   "tar -C /tmp -xf archive.tar"
 
 echo ""
+
+# ============================================================
+# unzip -d skipped in read-only modes (-l/-v/-t/-p/-Z)
+# ------------------------------------------------------------
+# `unzip -l archive.zip -d /tmp` lists contents; -d is unused
+# (or has zipinfo-specific semantics for -Z). Previously the
+# walker validated -d unconditionally and false-positived.
+# ============================================================
+echo "--- unzip -d in read-only modes (no extraction, -d unused) ---"
+
+expect_allowed "unzip -l -d /tmp (list)" \
+  "unzip -l archive.zip -d /tmp"
+expect_allowed "unzip -v -d /tmp (verbose list)" \
+  "unzip -v archive.zip -d /tmp"
+expect_allowed "unzip -t -d /tmp (test integrity)" \
+  "unzip -t archive.zip -d /tmp"
+expect_allowed "unzip -p -d /tmp (pipe to stdout)" \
+  "unzip -p archive.zip -d /tmp"
+expect_allowed "unzip -Z -d /tmp (zipinfo mode)" \
+  "unzip -Z archive.zip -d /tmp"
+
+# Extraction (no read-only flag) MUST still block.
+expect_blocked "unzip -d /tmp archive (extract still blocked)" \
+  "unzip archive.zip -d /tmp"
+expect_blocked "unzip -o -d /tmp archive (extract overwrite still blocked)" \
+  "unzip -o archive.zip -d /tmp"
+
+echo ""

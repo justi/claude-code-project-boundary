@@ -276,12 +276,45 @@ run_write_target_detectors() {
   fi
 
   # --- unzip -d PATH ---
+  # unzip writes into -d only when extracting. The read-only mode
+  # flags don't extract anything:
+  #   -l   list contents
+  #   -v   verbose list
+  #   -t   test archive integrity
+  #   -p   pipe extract to stdout
+  #   -Z   zipinfo mode (entirely different option grammar)
+  # In these modes -d is either ignored or has unrelated semantics.
+  # Skip the walker so `unzip -l archive.zip -d /tmp` doesn't false-fire.
   if command_name_is "unzip"; then
-    local unzip_dir
-    while IFS= read -r unzip_dir; do
-      [ -z "$unzip_dir" ] && continue
-      validate_command_path write "unzip -d" "$unzip_dir"
-    done < <(extract_option_values "-d" "" || true)
+    local unzip_readonly=0 ui=1 un=${#CMD_TOKENS[@]}
+    while [ $ui -lt $un ]; do
+      local utok
+      utok=$(strip_quotes "${CMD_TOKENS[$ui]}")
+      case "$utok" in
+        --) break ;;
+        -*)
+          # short cluster: scan letters; long forms aren't part of unzip's
+          # documented grammar (it uses single-dash multi-char like -aa),
+          # but keep the cluster scan defensive.
+          local _u_rest="${utok#-}" _u_ch
+          while [ -n "$_u_rest" ]; do
+            _u_ch="${_u_rest:0:1}"
+            _u_rest="${_u_rest:1}"
+            case "$_u_ch" in
+              l|v|t|p|Z) unzip_readonly=1 ;;
+            esac
+          done
+          ;;
+      esac
+      ui=$((ui + 1))
+    done
+    if [ "$unzip_readonly" -eq 0 ]; then
+      local unzip_dir
+      while IFS= read -r unzip_dir; do
+        [ -z "$unzip_dir" ] && continue
+        validate_command_path write "unzip -d" "$unzip_dir"
+      done < <(extract_option_values "-d" "" || true)
+    fi
   fi
 
   # --- cpio -D PATH ---
