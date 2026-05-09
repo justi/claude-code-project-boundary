@@ -742,3 +742,39 @@ expect_blocked "rsync --dry-run --log-file=/etc/rs.log src dst (log still blocke
   "rsync --dry-run --log-file=/etc/rs.log $PROJECT/src $PROJECT/dst"
 
 echo ""
+
+# ============================================================
+# psql \copy ... to stdout / from stdin: no local filesystem write
+# ------------------------------------------------------------
+# `\copy table to stdout` pipes rows to the caller's stdout —
+# nothing is written to the local filesystem. `\copy table
+# from stdin` reads stdin into the DB — modifies the DB, not
+# local files. The walker previously matched the meta+payload
+# regex and blocked these along with real file forms.
+# ============================================================
+echo "--- psql \\copy stdin/stdout endpoints (no local FS write) ---"
+
+expect_allowed 'psql -c "\copy mytable to stdout"' \
+  "psql -c '\\copy mytable to stdout'"
+expect_allowed 'psql -c "\copy mytable from stdin"' \
+  "psql -c '\\copy mytable from stdin'"
+expect_allowed 'psql -c "\copy mytable to PSTDOUT"' \
+  "psql -c '\\copy mytable to pstdout'"
+expect_allowed 'psql -c "\copy mytable from PSTDIN"' \
+  "psql -c '\\copy mytable from pstdin'"
+expect_allowed 'psql -c "\copy (select 1) to stdout"' \
+  "psql -c '\\copy (select 1) to stdout'"
+expect_allowed 'psql -c "\copy mytable to stdout with (format csv)"' \
+  "psql -c '\\copy mytable to stdout with (format csv)'"
+
+# Real file/pipe targets MUST still block.
+expect_blocked 'psql -c "\copy mytable to /tmp/x.csv" (file still blocked)' \
+  "psql -c '\\copy mytable to /tmp/x.csv'"
+expect_blocked 'psql -c "\copy mytable to file.csv" (bare file still blocked)' \
+  "psql -c '\\copy mytable to file.csv'"
+expect_blocked 'psql -c "\copy mytable from |cmd" (pipe still blocked)' \
+  "psql -c '\\copy mytable from |cmd'"
+expect_blocked 'psql -c "\o /tmp/out" (other meta still blocked)' \
+  "psql -c '\\o /tmp/out'"
+
+echo ""

@@ -98,8 +98,16 @@ run_db_dump_detectors() {
             #   \s    print history to stdout (no arg = stdout)
             #   \copy error without args
             if echo "$pqsql" | grep -qE '^(o|g|gx|w|s|copy)([[:space:]]+[^[:space:]]|/|\||\\)'; then
-              echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy) with a file or pipe payload. Cannot be safely inspected. Ask user for explicit permission." >&2
-              exit 2
+              # \copy ... (to|from) (stdin|stdout|pstdin|pstdout) writes
+              # NOTHING to the local filesystem — the endpoints are the
+              # caller's stdio, not files. Modifies/reads DB rows only,
+              # which is the normal operation of psql and outside the
+              # boundary's scope. The other meta-commands (o/g/gx/w/s)
+              # have no analogous safe form and stay blocked.
+              if ! echo "$pqsql" | grep -iqE '^copy[[:space:]].*[[:space:]](from|to)[[:space:]]+p?std(in|out)([[:space:]]|\(|;|$)'; then
+                echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy) with a file or pipe payload. Cannot be safely inspected. Ask user for explicit permission." >&2
+                exit 2
+              fi
             fi
             pqi=$((pqi + 1))
           fi
