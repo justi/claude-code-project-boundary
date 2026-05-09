@@ -687,3 +687,26 @@ expect_blocked "7z e archive.7z -o/tmp (extract-flat still blocked)" \
   "7z e archive.7z -o/tmp"
 
 echo ""
+
+# ============================================================
+# cpio -t (list mode): -D is unused, no extraction
+# ------------------------------------------------------------
+# `cpio -it -D /tmp < archive.cpio` prints a table of contents
+# without extracting anything. -D is unused in list mode.
+# ============================================================
+echo "--- cpio -t list mode (-D unused) ---"
+
+expect_allowed "cpio -it -D /tmp (list)" \
+  "cpio -it -D /tmp"
+expect_allowed "cpio --list -D /tmp (long form)" \
+  "cpio --list -D /tmp"
+expect_allowed "cpio -i -t -D /tmp (separated -t)" \
+  "cpio -i -t -D /tmp"
+
+# Extract mode (no -t) MUST still block.
+expect_blocked "cpio -i -D /tmp (extract still blocked)" \
+  "cpio -i -D /tmp"
+expect_blocked "cpio -id -D /tmp (extract with create-dirs still blocked)" \
+  "cpio -id -D /tmp"
+
+echo ""

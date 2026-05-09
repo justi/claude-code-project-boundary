@@ -318,12 +318,41 @@ run_write_target_detectors() {
   fi
 
   # --- cpio -D PATH ---
+  # cpio's -D is the destination dir only in copy-in extract mode
+  # (`-i` without `-t`). In list mode (`-it` / `-i -t`) no files are
+  # extracted, so -D is unused — `cpio -it -D /tmp < archive` was a
+  # false positive.
+  #
+  # Copy-out (`-o`) reads from -D into the archive; copy-pass (`-p`)
+  # writes copies into a destination passed as a positional, not via
+  # -D. This patch only addresses the `-t` (list) FP; other modes
+  # keep current behavior (write policy + allowlist).
   if command_name_is "cpio"; then
-    local cpio_dir
-    while IFS= read -r cpio_dir; do
-      [ -z "$cpio_dir" ] && continue
-      validate_command_path write "cpio -D" "$cpio_dir"
-    done < <(extract_option_values "-D" "" || true)
+    local cpio_listmode=0 ci=1 cn=${#CMD_TOKENS[@]}
+    while [ $ci -lt $cn ]; do
+      local ctok
+      ctok=$(strip_quotes "${CMD_TOKENS[$ci]}")
+      case "$ctok" in
+        --) break ;;
+        --list) cpio_listmode=1 ;;
+        -*)
+          local _c_rest="${ctok#-}" _c_ch
+          while [ -n "$_c_rest" ]; do
+            _c_ch="${_c_rest:0:1}"
+            _c_rest="${_c_rest:1}"
+            if [ "$_c_ch" = "t" ]; then cpio_listmode=1; fi
+          done
+          ;;
+      esac
+      ci=$((ci + 1))
+    done
+    if [ "$cpio_listmode" -eq 0 ]; then
+      local cpio_dir
+      while IFS= read -r cpio_dir; do
+        [ -z "$cpio_dir" ] && continue
+        validate_command_path write "cpio -D" "$cpio_dir"
+      done < <(extract_option_values "-D" "" || true)
+    fi
   fi
 
   # --- 7z / 7za / 7zr / 7zz: -o<dir> extract dest + a/u/d/rn archive ---
