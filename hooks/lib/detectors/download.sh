@@ -25,6 +25,17 @@ run_download_detectors() {
       is_discard_target "$resolved_curl" && continue
       block_unless_path_allowed write "curl output file" "$resolved_curl"
     done < <(extract_option_values "-o" "--output" || true)
+
+    # curl --output-dir DIR prepends DIR to the per-URL output filename
+    # selected by -O/--remote-name (URL basename) or a relative -o path.
+    # The -o walker above only sees the explicit -o value, so
+    # `curl --output-dir /tmp -O URL` and the attached `--output-dir=`
+    # form bypassed the boundary entirely.
+    local curl_outdir
+    while IFS= read -r curl_outdir; do
+      [ -z "$curl_outdir" ] && continue
+      validate_command_path write "curl --output-dir" "$curl_outdir"
+    done < <(extract_option_values "" "--output-dir" || true)
   fi
 
   # --- wget -O / wget --output-document outside project ---
