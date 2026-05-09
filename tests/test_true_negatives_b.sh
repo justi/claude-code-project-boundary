@@ -710,3 +710,35 @@ expect_blocked "cpio -id -D /tmp (extract with create-dirs still blocked)" \
   "cpio -id -D /tmp"
 
 echo ""
+
+# ============================================================
+# rsync --dry-run / -n: simulate, no destination writes
+# ------------------------------------------------------------
+# With --dry-run rsync prints what would be transferred but
+# never writes to the destination. The positional path walker
+# therefore false-positived `rsync --dry-run README.md /tmp/out`
+# and the cluster form `rsync -avn README.md /tmp/out`.
+# Per-flag write targets (log-file/write-batch/backup-dir/...)
+# stay enforced because rsync still writes those under dry-run.
+# ============================================================
+echo "--- rsync --dry-run / -n (simulate; no destination write) ---"
+
+expect_allowed "rsync --dry-run README.md /tmp/out" \
+  "rsync --dry-run README.md /tmp/out"
+expect_allowed "rsync -avn README.md /tmp/out (cluster form)" \
+  "rsync -avn README.md /tmp/out"
+expect_allowed "rsync -n README.md /tmp/out" \
+  "rsync -n README.md /tmp/out"
+
+# Real transfer (no -n / no --dry-run) MUST still block.
+expect_blocked "rsync README.md /tmp/out (no dry-run still blocked)" \
+  "rsync README.md /tmp/out"
+expect_blocked "rsync -av README.md /tmp/out (no n still blocked)" \
+  "rsync -av README.md /tmp/out"
+
+# Per-flag write targets remain enforced under --dry-run because
+# rsync writes the log/batch even when simulating.
+expect_blocked "rsync --dry-run --log-file=/etc/rs.log src dst (log still blocked)" \
+  "rsync --dry-run --log-file=/etc/rs.log $PROJECT/src $PROJECT/dst"
+
+echo ""

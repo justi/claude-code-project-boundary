@@ -146,6 +146,35 @@ run_write_target_detectors() {
   if command_name_is "rsync"; then
     local rsync_raw
     rsync_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//' || true)
+
+    # Pre-pass: detect dry-run. With --dry-run / -n rsync simulates
+    # the transfer and does NOT write to the destination, so the
+    # positional path validation false-positives `rsync --dry-run
+    # README.md /tmp/out` and the cluster form `rsync -avn ...`.
+    # The explicit write-shaped flags (--log-file=, --write-batch=,
+    # --backup-dir=, --partial-dir=, --temp-dir=, --only-write-batch=)
+    # MAY still write under --dry-run, so they keep their per-flag
+    # validation below.
+    local rsync_dryrun=0
+    local _rdr_tok
+    while IFS= read -r _rdr_tok; do
+      _rdr_tok=$(strip_quotes "$_rdr_tok")
+      [ -z "$_rdr_tok" ] && continue
+      case "$_rdr_tok" in
+        --) break ;;
+        --dry-run) rsync_dryrun=1; break ;;
+        --*) ;;
+        -*)
+          local _rdr_rest="${_rdr_tok#-}" _rdr_ch
+          while [ -n "$_rdr_rest" ]; do
+            _rdr_ch="${_rdr_rest:0:1}"
+            _rdr_rest="${_rdr_rest:1}"
+            if [ "$_rdr_ch" = "n" ]; then rsync_dryrun=1; break; fi
+          done
+          ;;
+      esac
+    done < <(tokenize_args "$rsync_raw")
+
     # Track POSIX `--` end-of-options. After it, every token is a
     # positional operand even when its name begins with `-`. Without
     # this, a file operand like `-owned` slipped past the
@@ -201,6 +230,11 @@ run_write_target_detectors() {
         *:*) continue ;;
       esac
       unset _rsync_first_seg
+      # In dry-run, no writes happen at the destination — skip
+      # positional validation. Per-flag write-target checks (above)
+      # still run because rsync writes the log/batch/backup files
+      # even in dry-run.
+      [ "$rsync_dryrun" -eq 1 ] && continue
       validate_command_path strict rsync "$TARGET"
     done < <(tokenize_args "$rsync_raw")
   fi
