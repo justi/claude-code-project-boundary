@@ -327,14 +327,17 @@ run_write_target_detectors() {
       case "$utok" in
         --) break ;;
         -*)
-          # short cluster: scan letters; long forms aren't part of unzip's
-          # documented grammar (it uses single-dash multi-char like -aa),
-          # but keep the cluster scan defensive.
+          # short cluster: scan letters; stop when we hit a value-bearing
+          # flag (d/P/x consume the rest as their value). Without the
+          # stop, `-d/tmp` would scan `t` and `p` from the path bytes
+          # and mark the invocation as read-only — masking the
+          # extraction.
           local _u_rest="${utok#-}" _u_ch
           while [ -n "$_u_rest" ]; do
             _u_ch="${_u_rest:0:1}"
             _u_rest="${_u_rest:1}"
             case "$_u_ch" in
+              d|P|x) break ;;
               l|v|t|p|Z) unzip_readonly=1 ;;
             esac
           done
@@ -343,11 +346,55 @@ run_write_target_detectors() {
       ui=$((ui + 1))
     done
     if [ "$unzip_readonly" -eq 0 ]; then
-      local unzip_dir
-      while IFS= read -r unzip_dir; do
-        [ -z "$unzip_dir" ] && continue
-        validate_command_path write "unzip -d" "$unzip_dir"
-      done < <(extract_option_values "-d" "" || true)
+      # Custom walker for -d. extract_option_values only handles split
+      # short (`-d VAL`) and `--long=VAL`, missing the shapes that real
+      # unzip accepts:
+      #   -d/tmp           attached value
+      #   -od /tmp         cluster end, split value
+      #   -od/tmp          cluster end, attached value
+      #   -do/tmp          d mid-cluster, attached value (rest after d)
+      # extract_option_values' coverage gap was a real bypass, not a
+      # FP4 regression — predates this walker.
+      local di=1 dn=${#CMD_TOKENS[@]}
+      while [ $di -lt $dn ]; do
+        local dtok
+        dtok=$(strip_quotes "${CMD_TOKENS[$di]}")
+        local dval=""
+        local _consumed_next=0
+        case "$dtok" in
+          --) break ;;
+          --*) di=$((di + 1)); continue ;;
+          -*)
+            local _drest="${dtok#-}"
+            # Find first 'd' in the cluster.
+            local _dpos=0 _dlen=${#_drest} _dch _df_d=-1
+            while [ $_dpos -lt $_dlen ]; do
+              _dch="${_drest:$_dpos:1}"
+              if [ "$_dch" = "d" ]; then _df_d=$_dpos; break; fi
+              _dpos=$((_dpos + 1))
+            done
+            if [ $_df_d -ge 0 ]; then
+              local _after="${_drest:$((_df_d + 1))}"
+              if [ -n "$_after" ]; then
+                dval="$_after"
+              elif [ $((di + 1)) -lt $dn ]; then
+                dval=$(strip_quotes "${CMD_TOKENS[$((di + 1))]}")
+                _consumed_next=1
+              fi
+            fi
+            ;;
+          *)
+            di=$((di + 1)); continue ;;
+        esac
+        if [ -n "$dval" ]; then
+          validate_command_path write "unzip -d" "$dval"
+        fi
+        if [ $_consumed_next -eq 1 ]; then
+          di=$((di + 2))
+        else
+          di=$((di + 1))
+        fi
+      done
     fi
   fi
 
