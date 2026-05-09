@@ -596,3 +596,39 @@ expect_allowed "kubectl cp upload with trailing --namespace default" \
   "kubectl cp /tmp/x.md mypod:/data/x.md --namespace default"
 
 echo ""
+
+# ============================================================
+# tar -C in non-extract modes: -C is source cwd or unused
+# ------------------------------------------------------------
+# The tar walker previously treated -C as a write target in
+# every mode. In list (-t), diff (-d), create (-c), append
+# (-r), update (-u), catenate (-A) modes tar READS from -C
+# (or ignores it for path-prefix only) and the actual archive
+# is the -f operand — outside-project -C is therefore a
+# legitimate source location, not a boundary write.
+# ============================================================
+echo "--- tar -C non-extract modes (-C is source cwd, not write target) ---"
+
+expect_allowed "tar -tf archive -C /tmp (list)" \
+  "tar -tf archive.tar -C /tmp"
+expect_allowed "tar -tvf archive -C /tmp (verbose list)" \
+  "tar -tvf archive.tar -C /tmp"
+expect_allowed "tar -df archive -C /tmp (diff/compare)" \
+  "tar -df archive.tar -C /tmp"
+expect_allowed "tar -cf out.tar -C /tmp file (create reads from -C)" \
+  "tar -cf $PROJECT/out.tar -C /tmp somefile"
+expect_allowed "tar --list -C /tmp" \
+  "tar --list -f archive.tar -C /tmp"
+expect_allowed "tar --create -f out.tar -C /tmp file" \
+  "tar --create -f $PROJECT/out.tar -C /tmp somefile"
+
+# Extract mode and the conservative default (no mode token) MUST
+# still block outside-project -C.
+expect_blocked "tar -xf archive -C /tmp (extract still blocked)" \
+  "tar -xf archive.tar -C /tmp"
+expect_blocked "tar --extract -C /tmp (long extract still blocked)" \
+  "tar --extract -f archive.tar -C /tmp"
+expect_blocked "tar -C /tmp -xf archive (any order, extract)" \
+  "tar -C /tmp -xf archive.tar"
+
+echo ""

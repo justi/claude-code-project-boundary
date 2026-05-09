@@ -208,28 +208,71 @@ run_write_target_detectors() {
   # --- tar: check every -C / --directory=PATH for extraction ---
   # tar allows multiple -C switches and the *last* one wins, so we must
   # validate every occurrence — not just the first.
+  #
+  # Mode-aware: -C is only a write target in EXTRACT mode (-x / --extract
+  # / --get). For -c/--create, -r/--append, -u/--update, -A/--catenate,
+  # tar READS source files from -C; for -t/--list and -d/--diff/--compare
+  # tar reads only — none of these write into -C. The previous unconditional
+  # check false-positived legitimate `tar -tf archive.tar -C /tmp`,
+  # `tar -cf out.tar -C /tmp file`, etc.
+  #
+  # Conservative default: when the mode flag is absent or unrecognised,
+  # KEEP the prior block — preserves coverage of any tar invocation
+  # whose mode this walker didn't classify.
   if command_name_is "tar"; then
-    local ti=0 tn=${#CMD_TOKENS[@]}
-    while [ $ti -lt $tn ]; do
-      local ttok
-      ttok=$(strip_quotes "${CMD_TOKENS[$ti]}")
-      local tar_dir=""
-      if [ "$ttok" = "-C" ] || [ "$ttok" = "--directory" ]; then
-        if [ $((ti + 1)) -lt $tn ]; then
-          tar_dir="${CMD_TOKENS[$((ti + 1))]}"
-          ti=$((ti + 2))
+    local tar_mode="" ti=1 tn=${#CMD_TOKENS[@]}
+    while [ $ti -lt $tn ] && [ -z "$tar_mode" ]; do
+      local mtok
+      mtok=$(strip_quotes "${CMD_TOKENS[$ti]}")
+      case "$mtok" in
+        --extract|--get)
+          tar_mode=extract ;;
+        --list|--diff|--compare|--create|--append|--update|--catenate|--concatenate|--delete|--test-label)
+          tar_mode=read_or_nonC ;;
+        --*)
+          : ;;
+        -*)
+          # Short cluster: scan letters. Mode chars are mutually exclusive
+          # in tar grammar, so the first one we hit wins.
+          local _rest="${mtok#-}" _ch
+          while [ -n "$_rest" ]; do
+            _ch="${_rest:0:1}"
+            _rest="${_rest:1}"
+            case "$_ch" in
+              x) tar_mode=extract; break ;;
+              t|c|r|u|A|d) tar_mode=read_or_nonC; break ;;
+            esac
+          done
+          ;;
+      esac
+      ti=$((ti + 1))
+    done
+
+    # Only enforce -C when mode=extract OR mode=unknown (fail-closed for
+    # uncategorised invocations).
+    if [ "$tar_mode" != "read_or_nonC" ]; then
+      ti=0
+      while [ $ti -lt $tn ]; do
+        local ttok
+        ttok=$(strip_quotes "${CMD_TOKENS[$ti]}")
+        local tar_dir=""
+        if [ "$ttok" = "-C" ] || [ "$ttok" = "--directory" ]; then
+          if [ $((ti + 1)) -lt $tn ]; then
+            tar_dir="${CMD_TOKENS[$((ti + 1))]}"
+            ti=$((ti + 2))
+          else
+            ti=$((ti + 1))
+          fi
+        elif [[ "$ttok" == "--directory="* ]]; then
+          tar_dir="${ttok#--directory=}"
+          ti=$((ti + 1))
         else
           ti=$((ti + 1))
+          continue
         fi
-      elif [[ "$ttok" == "--directory="* ]]; then
-        tar_dir="${ttok#--directory=}"
-        ti=$((ti + 1))
-      else
-        ti=$((ti + 1))
-        continue
-      fi
-      [ -n "$tar_dir" ] && validate_command_path write "tar -C" "$tar_dir"
-    done
+        [ -n "$tar_dir" ] && validate_command_path write "tar -C" "$tar_dir"
+      done
+    fi
   fi
 
   # --- unzip -d PATH ---
