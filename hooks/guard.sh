@@ -72,6 +72,44 @@ if [ -z "$COMMAND" ] && [ -z "$FILE_PATH" ]; then
   exit 0
 fi
 
+# --- Normalize Windows-native paths from hook input (issue #28) ---
+# On Windows + MSYS2 bash, the Bash hook benefits from MSYS path
+# rewriting on command-line arguments (`C:\Users\x` → `/c/Users/x`),
+# but Edit/Write/MultiEdit deliver `tool_input.file_path` and `cwd`
+# as raw JSON strings — `C:\Users\x` arrives unchanged. The downstream
+# code's `[[ "$path" != /* ]]` relative-path branch then prepends
+# `$PROJECT_DIR/`, masking outside-project writes as in-project.
+#
+# Detect Windows-native shapes:
+#   ^[A-Za-z]:[\\/]   drive-letter (C:\, D:/, ...)
+#   ^\\\\             UNC (\\server\share)
+# When `cygpath -u` is available (MSYS2/Cygwin shell), convert to
+# POSIX form and let the normal boundary check run. Without cygpath,
+# fail-closed: refuse to interpret an absolute Windows path as if
+# it were project-relative. On Linux/macOS shells these shapes are
+# never legitimate POSIX paths, so the fail-closed branch is the
+# correct default.
+_pb_normalize_windows_path() {
+  local label="$1"
+  local val="$2"
+  if [[ "$val" =~ ^[A-Za-z]:[\\/] ]] || [[ "$val" =~ ^\\\\ ]]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      cygpath -u "$val"
+      return 0
+    fi
+    echo "BLOCKED: $label is a Windows-native path '$val' but cygpath is not available; cannot reliably enforce the project boundary. Pass POSIX paths or install cygpath (MSYS2/Cygwin)." >&2
+    return 2
+  fi
+  printf '%s\n' "$val"
+}
+
+if [ -n "$FILE_PATH" ]; then
+  FILE_PATH=$(_pb_normalize_windows_path "tool_input.file_path" "$FILE_PATH") || exit $?
+fi
+if [ -n "$EVENT_CWD" ]; then
+  EVENT_CWD=$(_pb_normalize_windows_path "hook event cwd" "$EVENT_CWD") || exit $?
+fi
+
 # Use cwd from the hook event if provided, so relative paths resolve correctly.
 # EFFECTIVE_CWD is used to resolve relative paths in commands.
 if [ -n "$EVENT_CWD" ]; then
@@ -89,6 +127,11 @@ fi
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 # Ensure PROJECT_DIR has no trailing slash for consistent comparison
 PROJECT_DIR="${PROJECT_DIR%/}"
+# Normalize PROJECT_DIR if it arrived as a Windows-native path
+# (issue #28). Same fail-closed semantics as FILE_PATH/EVENT_CWD.
+if [ -n "$PROJECT_DIR" ]; then
+  PROJECT_DIR=$(_pb_normalize_windows_path "CLAUDE_PROJECT_DIR" "$PROJECT_DIR") || exit $?
+fi
 
 # EFFECTIVE_CWD: where relative paths in commands resolve to.
 # Uses cwd from hook event if provided, otherwise PROJECT_DIR.
