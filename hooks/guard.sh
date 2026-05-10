@@ -64,6 +64,16 @@ source "$_GUARD_DIR/lib/remote_dispatch.sh"
 source "$_GUARD_DIR/lib/subcmd_flags.sh"
 
 INPUT=$(cat)
+
+# jq is a hard dependency for parsing the hook input JSON. Without it
+# the parsing below silently produces empty values, which then makes
+# the guard exit 0 — indistinguishable from "boundary working but
+# command happened to be allowed". Fail loud (issue #32).
+if ! command -v jq >/dev/null 2>&1; then
+  echo "BLOCKED: 'jq' is required by the project-boundary hook shell but was not found on PATH. Install jq (brew install jq / apt install jq / scoop install jq / winget install jqlang.jq) and retry." >&2
+  exit 2
+fi
+
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 EVENT_CWD=$(echo "$INPUT" | jq -r '.cwd // empty')

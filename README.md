@@ -103,6 +103,21 @@ git commit -m "Subject line" -m "Body paragraph."
 
 Avoid: writing the message to `.git/COMMIT_*` files (triggers a Write-tool prompt) or to `/tmp/*_msg.txt` (outside-project, blocked). The `SessionStart` hook ships a one-line hint that points Claude at the heredoc form on the first try, so no manual nudging is needed.
 
+## Requirements
+
+`bash` and `jq` must be on the PATH of the hook shell. macOS and most Linux distros ship bash; `jq` is usually present but install it explicitly if missing — without `jq` the hook fails closed with a clear `BLOCKED: 'jq' is required ...` message.
+
+| Platform | Install |
+|---|---|
+| macOS | `brew install jq` |
+| Debian/Ubuntu | `apt install jq` |
+| Fedora/RHEL | `dnf install jq` |
+| Arch | `pacman -S jq` |
+| Windows (MSYS2) | `pacman -S jq` |
+| Windows (Scoop/Winget) | `scoop install jq` or `winget install jqlang.jq` |
+
+On Windows the plugin runs under MSYS2 bash; `cygpath` (shipped with MSYS2) is required for Windows-native paths (`C:\…`, `\\server\…`) to be normalized — without it those paths fail closed.
+
 ## Install
 
 Direct:
