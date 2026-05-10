@@ -686,6 +686,14 @@ expect_blocked "7z x archive.7z -o/tmp (extract still blocked)" \
 expect_blocked "7z e archive.7z -o/tmp (extract-flat still blocked)" \
   "7z e archive.7z -o/tmp"
 
+# Codex#4 LOW: split `-w PATH` before the verb — verb-detector must
+# skip the value token, otherwise it mis-classifies PATH as the verb
+# and the read-only-verb gate never fires.
+expect_allowed "7z -w /tmp l archive.7z (split -w before verb)" \
+  "7z -w /tmp l archive.7z"
+expect_allowed "7z -o /tmp l archive.7z (split -o before read verb)" \
+  "7z -o /tmp l archive.7z"
+
 echo ""
 
 # ============================================================

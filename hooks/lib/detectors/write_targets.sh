@@ -521,6 +521,13 @@ run_write_target_detectors() {
       local zct
       zct=$(strip_quotes "${CMD_TOKENS_SCAN[$zci]}")
       case "$zct" in
+        # Codex#4 LOW: bare `-o` / `-w` (split form) takes the next
+        # token as its value. Without skipping that next token here
+        # the verb-detector consumes the value as the verb, so
+        # `7z -w /tmp l archive` mis-classified `/tmp` as the verb
+        # and Pass 1b validated `-w` despite the read-only `l`.
+        -o|-w)
+          zci=$((zci + 2)); continue ;;
         -*|'') zci=$((zci + 1)); continue ;;
         *)     zcmd="$zct"; break ;;
       esac
