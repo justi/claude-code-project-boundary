@@ -169,7 +169,7 @@ if [ -n "$COMMAND" ]; then
     ssh|scp|rsync|docker|kubectl|oc|podman)
       : ;;
     *)
-      if echo "$COMMAND" | grep -qE '(^|[[:space:]>|<&;=(])([A-Za-z]:[\\/]|\\\\)'; then
+      if echo "$COMMAND" | grep -qE "(^|[[:space:]>|<&;=(\"'])([A-Za-z]:[\\\\/]|\\\\\\\\)"; then
         if ! command -v cygpath >/dev/null 2>&1; then
           echo "BLOCKED: command contains a Windows-native path token but cygpath is not available; cannot reliably enforce the project boundary. Pass POSIX paths or install cygpath (MSYS2/Cygwin)." >&2
           exit 2
