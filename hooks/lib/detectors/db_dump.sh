@@ -82,8 +82,21 @@ run_db_dump_detectors() {
             # `\\` (next meta attached) on top of whitespace.
             # \! always opens an interactive shell or executes attached
             # shell command — fail-closed regardless of arg shape.
-            if echo "$pqsql" | grep -qE '^\\!'; then
+            #
+            # Codex#1 HIGH: psql executes meta-commands wherever they
+            # appear in the -c value, so the same patterns must also
+            # match after a `;` statement separator. Multi-statement
+            # payloads that mix `\copy ... to stdout` with unsafe metas
+            # require statement-aware parsing we don't do — fail-closed
+            # on any post-separator meta (no safe exception).
+            if echo "$pqsql" | grep -qE '(^|;)[[:space:]]*\\!'; then
               echo "BLOCKED: 'psql -c' contains the \\! meta-command which executes a shell. Cannot be safely inspected. Ask user for explicit permission." >&2
+              exit 2
+            fi
+            # Post-separator meta with payload — block unconditionally
+            # (no leading-position safe exception).
+            if echo "$pqsql" | grep -qE ';[[:space:]]*(o|g|gx|w|s|copy)([[:space:]]+[^[:space:]]|/|\||\\)'; then
+              echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy) after a statement separator with a file or pipe payload. Cannot be safely inspected. Ask user for explicit permission." >&2
               exit 2
             fi
             # \o / \g / \gx / \w / \s / \copy with an ATTACHED payload —
@@ -126,8 +139,15 @@ run_db_dump_detectors() {
             exit 2
           fi
           # \! always opens a shell — fail-closed regardless of arg shape.
-          if echo "$pqsql" | grep -qE '^\\!'; then
+          # Codex#1 HIGH: also catch \! after `;` separator (mirror of
+          # the split -c VALUE branch above).
+          if echo "$pqsql" | grep -qE '(^|;)[[:space:]]*\\!'; then
             echo "BLOCKED: 'psql -c' contains the \\! meta-command which executes a shell. Cannot be safely inspected. Ask user for explicit permission." >&2
+            exit 2
+          fi
+          # Post-separator meta with payload — block unconditionally.
+          if echo "$pqsql" | grep -qE ';[[:space:]]*(o|g|gx|w|s|copy)([[:space:]]+[^[:space:]]|/|\||\\)'; then
+            echo "BLOCKED: 'psql -c' contains a backslash meta-command (\\o / \\g / \\gx / \\w / \\s / \\copy) after a statement separator with a file or pipe payload. Cannot be safely inspected. Ask user for explicit permission." >&2
             exit 2
           fi
           # \o / \g / \gx / \w / \s / \copy with an attached payload only —
