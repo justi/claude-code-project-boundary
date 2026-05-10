@@ -110,6 +110,53 @@ if [ -n "$EVENT_CWD" ]; then
   EVENT_CWD=$(_pb_normalize_windows_path "hook event cwd" "$EVENT_CWD") || exit $?
 fi
 
+# Bash hook COMMAND can also carry Windows-native path tokens
+# (Codex re-review Cat 6): `echo x > C:/Users/foo`, `tee C:\path`,
+# `curl -o C:/path URL`, etc. resolve_command_path treats those as
+# relative and resolves them under EFFECTIVE_CWD, producing an
+# in-project-looking path that passes is_inside_project.
+#
+# Detection scope is the whole COMMAND string with token-boundary
+# anchors (start, whitespace, redirect/pipe/separator). We accept
+# that this matches inside heredoc bodies too — a fail-closed
+# false-positive on a path-shaped string in a heredoc is preferred
+# over leaving the bypass open.
+#
+# On MSYS2 (cygpath available), bash's argv rewriting normally
+# converts these forms before guard sees them; per-token
+# pass-through under cygpath remains a follow-up. On Linux/macOS
+# (cygpath absent), fail-closed.
+if [ -n "$COMMAND" ]; then
+  # Skip Windows-path detection for tools whose operands include
+  # `host:path` / `container:path` shapes that visually collide with
+  # Windows drive letters (`c:/tmp`). These tools route the path-side
+  # to a remote filesystem the project boundary doesn't apply to:
+  #   ssh REMOTE_HOST [command]    — remote command on remote host
+  #   scp src host:path            — remote copy
+  #   rsync src host:path          — remote sync
+  #   docker cp src container:/p   — container copy
+  #   kubectl cp pod:src local     — k8s copy
+  #   oc cp / podman cp            — same shape
+  _pb_cmd_trimmed="${COMMAND#"${COMMAND%%[![:space:]]*}"}"
+  _pb_cmd_first="${_pb_cmd_trimmed%% *}"
+  _pb_cmd_basename="${_pb_cmd_first##*/}"
+  _pb_cmd_basename_quoteless="${_pb_cmd_basename%\"}"
+  _pb_cmd_basename_quoteless="${_pb_cmd_basename_quoteless#\"}"
+  case "$_pb_cmd_basename_quoteless" in
+    ssh|scp|rsync|docker|kubectl|oc|podman)
+      : ;;
+    *)
+      if echo "$COMMAND" | grep -qE '(^|[[:space:]>|<&;=(])([A-Za-z]:[\\/]|\\\\)'; then
+        if ! command -v cygpath >/dev/null 2>&1; then
+          echo "BLOCKED: command contains a Windows-native path token but cygpath is not available; cannot reliably enforce the project boundary. Pass POSIX paths or install cygpath (MSYS2/Cygwin)." >&2
+          exit 2
+        fi
+      fi
+      ;;
+  esac
+  unset _pb_cmd_trimmed _pb_cmd_first _pb_cmd_basename _pb_cmd_basename_quoteless
+fi
+
 # Use cwd from the hook event if provided, so relative paths resolve correctly.
 # EFFECTIVE_CWD is used to resolve relative paths in commands.
 if [ -n "$EVENT_CWD" ]; then
