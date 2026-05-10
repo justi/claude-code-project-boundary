@@ -92,7 +92,20 @@ fi
 _pb_normalize_windows_path() {
   local label="$1"
   local val="$2"
-  if [[ "$val" =~ ^[A-Za-z]:[\\/] ]] || [[ "$val" =~ ^\\\\ ]]; then
+  # file:// URIs are never a legitimate file_path or cwd value —
+  # refuse them outright (Codex re-#28 Cat 1b). cygpath does not
+  # parse URIs, so fail-closed regardless of its presence.
+  if [[ "$val" =~ ^file:// ]]; then
+    echo "BLOCKED: $label is a file:// URI '$val'; pass a POSIX path instead." >&2
+    return 2
+  fi
+  # Windows-native path shapes:
+  #   ^[A-Za-z]:[\\/]   drive-letter + slash (C:\, D:/)
+  #   ^\\\\             UNC path (\\server\share, \\?\C:\)
+  #   ^[A-Za-z]:        drive-relative (C:foo) — Codex re-#28 Cat 1a.
+  #                     Accepted FP risk: a POSIX file literally named
+  #                     `c:something` is fail-closed; rare in practice.
+  if [[ "$val" =~ ^([A-Za-z]:|\\\\) ]]; then
     if command -v cygpath >/dev/null 2>&1; then
       cygpath -u "$val"
       return 0
