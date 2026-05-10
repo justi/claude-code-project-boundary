@@ -142,14 +142,36 @@ run_download_detectors() {
           --) break ;;
           --directory-prefix=*)
             _wpval="${_wpvtok#--directory-prefix=}" ;;
-          --directory-prefix|-P)
+          --directory-prefix)
             if [ $((_wpvi + 1)) -lt $_wpvn ]; then
               _wpval=$(strip_quotes "${CMD_TOKENS[$((_wpvi + 1))]}")
               _wpv_consumed=1
             fi
             ;;
-          -P?*)
-            _wpval="${_wpvtok#-P}" ;;
+          --*) ;;
+          -*)
+            # Codex re-review B: cluster `-qP/tmp`, `-vqP/etc`, etc.
+            # Find 'P' anywhere in the short cluster; reset of the
+            # token after P is the attached value, or the next token
+            # when P is at end-of-cluster. Mirrors the unzip -d
+            # walker (sec 102) — same shape gap.
+            local _wpvrest="${_wpvtok#-}"
+            local _wpvpos=0 _wpvlen=${#_wpvrest} _wpvch _wpvf_p=-1
+            while [ $_wpvpos -lt $_wpvlen ]; do
+              _wpvch="${_wpvrest:$_wpvpos:1}"
+              if [ "$_wpvch" = "P" ]; then _wpvf_p=$_wpvpos; break; fi
+              _wpvpos=$((_wpvpos + 1))
+            done
+            if [ $_wpvf_p -ge 0 ]; then
+              local _wpvafter="${_wpvrest:$((_wpvf_p + 1))}"
+              if [ -n "$_wpvafter" ]; then
+                _wpval="$_wpvafter"
+              elif [ $((_wpvi + 1)) -lt $_wpvn ]; then
+                _wpval=$(strip_quotes "${CMD_TOKENS[$((_wpvi + 1))]}")
+                _wpv_consumed=1
+              fi
+            fi
+            ;;
         esac
         if [ -n "$_wpval" ]; then
           validate_command_path write "wget -P" "$_wpval"
