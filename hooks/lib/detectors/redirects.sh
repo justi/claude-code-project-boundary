@@ -151,8 +151,21 @@ run_redirect_detectors() {
       # Follow symlinks so that `echo x > project/link` where
       # `link -> /etc/passwd` is caught. resolve_path only canonicalizes
       # the dirname, not the basename — a symlink leaf slips through.
+      #
+      # Stop the chase at known discard sinks (kernel-managed fd
+      # aliases). On Linux `/dev/stdout` -> `/proc/self/fd/1` -> the
+      # real underlying fd target (a pipe, a log file, etc.); chasing
+      # past `/proc/self/fd/1` would mis-classify a stdout redirect
+      # as an outside-project write. macOS doesn't hit this because
+      # `/dev/fd/N` there is a character device, not a symlink, so
+      # the chase already stops naturally.
       local redir_depth=20
+      local redir_hit_discard=0
       while [[ -L "$resolved_redir" && $redir_depth -gt 0 ]]; do
+        if is_discard_target "$resolved_redir"; then
+          redir_hit_discard=1
+          break
+        fi
         local redir_link
         redir_link=$(readlink "$resolved_redir")
         if [[ "$redir_link" == /* ]]; then
@@ -162,7 +175,11 @@ run_redirect_detectors() {
         fi
         redir_depth=$((redir_depth - 1))
       done
-      if [[ -L "$resolved_redir" ]]; then
+      # A residual symlink after the chase means we exhausted depth or
+      # hit a cycle — fail closed. Discard sinks reach this point with
+      # their symlink intact, so the explicit early-exit flag suppresses
+      # the too-deep error.
+      if [[ -L "$resolved_redir" && $redir_hit_discard -eq 0 ]]; then
         echo "BLOCKED: Redirect target symlink chain too deep or circular at '$resolved_redir'. Ask user for explicit permission." >&2
         exit 2
       fi
