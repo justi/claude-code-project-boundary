@@ -194,6 +194,12 @@ block_pipe_to_shell() {
     for shell_token in $shell_args; do
       case "$shell_token" in
         --) break ;;  # everything after -- is args to the script/stdin
+        # Informational-only flags exit before reading stdin or
+        # executing user code — `bash --version` / `sh --help` are
+        # not pipe-to-shell targets even when they appear as a
+        # standalone subcommand. Issue #33.
+        --version|--help|-V)
+          has_script=1; break ;;
         -*) continue ;;
         *) has_script=1; break ;;
       esac
