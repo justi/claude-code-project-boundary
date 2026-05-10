@@ -777,4 +777,14 @@ expect_blocked 'psql -c "\copy mytable from |cmd" (pipe still blocked)' \
 expect_blocked 'psql -c "\o /tmp/out" (other meta still blocked)' \
   "psql -c '\\o /tmp/out'"
 
+# Same exception in the attached -c?* / --command= branch.
+expect_allowed 'psql --command="\copy mytable to stdout" (long attached)' \
+  "psql --command='\\copy mytable to stdout'"
+expect_allowed 'psql -c"\copy mytable to stdout" (short attached)' \
+  "psql -c'\\copy mytable to stdout'"
+expect_allowed 'psql --command="\copy mytable from stdin"' \
+  "psql --command='\\copy mytable from stdin'"
+expect_blocked 'psql --command="\copy mytable to /tmp/x.csv" (file still blocked)' \
+  "psql --command='\\copy mytable to /tmp/x.csv'"
+
 echo ""
