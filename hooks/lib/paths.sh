@@ -290,6 +290,14 @@ is_discard_target() {
     /dev/fd/1|/dev/fd/2) return 0 ;;
     /proc/self/fd/1|/proc/self/fd/2) return 0 ;;
   esac
+  # On Linux, `cd -P` through /dev/fd (symlink to /proc/self/fd) and
+  # /proc/self (symlink to /proc/<pid>) canonicalises both to the
+  # caller's actual PID — `wget -O /dev/fd/1` reaches is_discard_target
+  # as `/proc/12345/fd/1`. Match the per-process form here so the
+  # discard semantics survive `resolve_path` canonicalisation.
+  if [[ "$1" =~ ^/proc/[0-9]+/fd/[12]$ ]]; then
+    return 0
+  fi
   return 1
 }
 
