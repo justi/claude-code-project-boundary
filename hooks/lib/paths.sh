@@ -257,18 +257,25 @@ is_write_permitted() {
 }
 
 # --- Classify POSIX bit-bucket write targets ---
-# Return 0 iff $1 is a POSIX bit-bucket write target whose bytes are
-# guaranteed to be discarded with no real filesystem write.
+# Return 0 iff $1 is a POSIX device passthrough whose bytes do NOT
+# materialise as a filesystem write under any project boundary:
 #
-# /dev/null is the canonical bit-bucket on every POSIX system
-# (Linux, macOS, BSD) at the same path. Writes to it are accepted
-# by the kernel and dropped — there is no filesystem target, no
-# parent directory mutation, no symlink side-effect. Callers that
-# KNOW they are writing a target (redirect operators, `tee`,
-# `curl -o`, `wget -O`, `dd of=`) can short-circuit here before
-# invoking is_write_permitted, so probe and silencing workflows
-# like `curl -o /dev/null` and `2>/dev/null` don't require a
-# per-project allowlist entry.
+#   /dev/null              kernel bit-bucket (canonical discard)
+#   /dev/stdout, /dev/fd/1, /proc/self/fd/1
+#                          fd-1 alias — bytes flow to the caller's
+#                          stdout, never to a file in /dev or /proc
+#   /dev/stderr, /dev/fd/2, /proc/self/fd/2
+#                          fd-2 alias — same, for stderr
+#
+# Linux exposes /dev/stdout etc. as symlinks to /proc/self/fd/N;
+# macOS/BSD provide them via devfs. In every case the kernel
+# routes the write to an existing file descriptor — there is no
+# filesystem mutation under /dev or /proc to enforce a boundary
+# on. Callers that KNOW they are writing a target (redirect
+# operators, `tee`, `curl -o`, `wget -O`, `dd of=`) can
+# short-circuit here before invoking is_write_permitted so
+# `curl -o /dev/stdout`, `2>/dev/null`, `wget -O /dev/fd/1`
+# don't require allowlist entries (Codex re-review D).
 #
 # IMPORTANT: this must NOT be used from call sites that do an
 # in-place edit via temp-file + rename (`sed -i`, `truncate`) or
@@ -278,7 +285,12 @@ is_write_permitted() {
 # boundary check must still fire there. See is_write_permitted
 # docstring for the full separation of write semantics.
 is_discard_target() {
-  [ "$1" = "/dev/null" ]
+  case "$1" in
+    /dev/null|/dev/stdout|/dev/stderr) return 0 ;;
+    /dev/fd/1|/dev/fd/2) return 0 ;;
+    /proc/self/fd/1|/proc/self/fd/2) return 0 ;;
+  esac
+  return 1
 }
 
 # --- DRY helpers for the detector cluster --------------------------

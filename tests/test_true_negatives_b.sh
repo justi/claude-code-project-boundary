@@ -857,3 +857,32 @@ expect_allowed "wget -P /tmp -O/dev/null URL (attached discard)" \
   "wget -P /tmp -O/dev/null https://example.com/file"
 
 echo ""
+
+# ============================================================
+# /dev/stdout / /dev/fd/1 / /proc/self/fd/1 as discard sinks
+# ------------------------------------------------------------
+# is_discard_target only knew /dev/null. Linux exposes
+# /dev/stdout etc. as fd-1 aliases — writes flow through the
+# caller's stdout, never to a filesystem file. wget, curl,
+# tee, and redirects all over-blocked these (Codex re-review D).
+# ============================================================
+echo "--- /dev/stdout, /dev/fd/1, /proc/self/fd/1 as discard sinks ---"
+
+expect_allowed "wget -O /dev/stdout URL" \
+  "wget -O /dev/stdout https://example.com/file"
+expect_allowed "wget -O /dev/fd/1 URL" \
+  "wget -O /dev/fd/1 https://example.com/file"
+expect_allowed "wget -O /proc/self/fd/1 URL" \
+  "wget -O /proc/self/fd/1 https://example.com/file"
+expect_allowed "curl -o /dev/stdout URL" \
+  "curl -o /dev/stdout https://example.com/file"
+expect_allowed "tee /dev/stdout (passthrough)" \
+  "tee /dev/stdout"
+expect_allowed "echo x > /dev/stdout (redirect to stdout)" \
+  "echo x > /dev/stdout"
+expect_allowed "echo x 2> /dev/stderr (redirect to stderr)" \
+  "echo x 2> /dev/stderr"
+expect_allowed "dd if=src of=/dev/stdout (dd to stdout)" \
+  "dd if=$PROJECT/src of=/dev/stdout"
+
+echo ""
