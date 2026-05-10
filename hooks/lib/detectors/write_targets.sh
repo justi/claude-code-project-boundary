@@ -254,14 +254,16 @@ run_write_target_detectors() {
   # KEEP the prior block — preserves coverage of any tar invocation
   # whose mode this walker didn't classify.
   if command_name_is "tar"; then
-    local tar_mode="" ti=1 tn=${#CMD_TOKENS[@]}
+    local tar_mode="" tar_writes_archive=0 ti=1 tn=${#CMD_TOKENS[@]}
     while [ $ti -lt $tn ] && [ -z "$tar_mode" ]; do
       local mtok
       mtok=$(strip_quotes "${CMD_TOKENS[$ti]}")
       case "$mtok" in
         --extract|--get)
           tar_mode=extract ;;
-        --list|--diff|--compare|--create|--append|--update|--catenate|--concatenate|--delete|--test-label)
+        --create|--append|--update|--catenate|--concatenate|--delete)
+          tar_mode=read_or_nonC; tar_writes_archive=1 ;;
+        --list|--diff|--compare|--test-label)
           tar_mode=read_or_nonC ;;
         --*)
           : ;;
@@ -274,7 +276,8 @@ run_write_target_detectors() {
             _rest="${_rest:1}"
             case "$_ch" in
               x) tar_mode=extract; break ;;
-              t|c|r|u|A|d) tar_mode=read_or_nonC; break ;;
+              c|r|u|A) tar_mode=read_or_nonC; tar_writes_archive=1; break ;;
+              t|d) tar_mode=read_or_nonC; break ;;
             esac
           done
           ;;
@@ -305,6 +308,60 @@ run_write_target_detectors() {
           continue
         fi
         [ -n "$tar_dir" ] && validate_command_path write "tar -C" "$tar_dir"
+      done
+    fi
+
+    # -f / --file is a write target in archive-write modes (c/r/u/A and
+    # --delete which rewrites in place). Read modes (t/d) and extract
+    # (x) read -f and don't need this check. The previous walker never
+    # validated -f, so `tar -cf /tmp/out.tar src`,
+    # `tar --delete -f /tmp/archive.tar member`, etc. bypassed the
+    # boundary entirely (Codex bonus finding).
+    if [ "$tar_writes_archive" -eq 1 ]; then
+      local _tfi=1
+      while [ $_tfi -lt $tn ]; do
+        local _tftok
+        _tftok=$(strip_quotes "${CMD_TOKENS[$_tfi]}")
+        local _tfval="" _tf_consumed=0
+        case "$_tftok" in
+          --) break ;;
+          --file=*)
+            _tfval="${_tftok#--file=}" ;;
+          --file)
+            if [ $((_tfi + 1)) -lt $tn ]; then
+              _tfval=$(strip_quotes "${CMD_TOKENS[$((_tfi + 1))]}")
+              _tf_consumed=1
+            fi
+            ;;
+          -*)
+            # Find 'f' anywhere in the cluster. Per GNU tar grammar an
+            # option that takes an argument always reads the NEXT argv
+            # element when in a short cluster, regardless of where in
+            # the cluster it sits — so `-cf out.tar`, `-cvf out.tar`,
+            # `-czf out.tar.gz`, and `-cfz out.tar` all consume the
+            # next token as the archive path.
+            local _tfrest="${_tftok#-}" _tfpos=0 _tflen=${#_tftok} _tfch _tff_seen=0
+            _tflen=${#_tfrest}
+            while [ $_tfpos -lt $_tflen ]; do
+              _tfch="${_tfrest:$_tfpos:1}"
+              if [ "$_tfch" = "f" ]; then _tff_seen=1; break; fi
+              _tfpos=$((_tfpos + 1))
+            done
+            if [ $_tff_seen -eq 1 ] && [ $((_tfi + 1)) -lt $tn ]; then
+              _tfval=$(strip_quotes "${CMD_TOKENS[$((_tfi + 1))]}")
+              _tf_consumed=1
+            fi
+            ;;
+        esac
+        if [ -n "$_tfval" ] && [ "$_tfval" != "-" ]; then
+          # `-f -` is the stdout sink — discard endpoint, allow.
+          validate_command_path write "tar -f" "$_tfval"
+        fi
+        if [ $_tf_consumed -eq 1 ]; then
+          _tfi=$((_tfi + 2))
+        else
+          _tfi=$((_tfi + 1))
+        fi
       done
     fi
   fi
