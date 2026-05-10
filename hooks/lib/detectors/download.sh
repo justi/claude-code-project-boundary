@@ -121,6 +121,10 @@ run_download_detectors() {
           fi
           ;;
         --output-document=*) wget_pdir_active=0; break ;;
+        # Codex#3 LOW: attached short form `-O-` / `-O/dev/null` /
+        # `-O/path` is also a literal -O target — wget ignores -P
+        # when -O is set, regardless of split-vs-attached form.
+        -O?*) wget_pdir_active=0; break ;;
       esac
       _wpi=$((_wpi + 1))
     done

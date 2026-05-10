@@ -841,4 +841,11 @@ expect_blocked "wget -P /tmp URL (plain still blocked)" \
 expect_blocked "wget -P /tmp -O /etc/x URL (-O walker blocks)" \
   "wget -P /tmp -O /etc/x https://example.com/file"
 
+# Codex#3: attached -O- (no space) — wget writes to stdout,
+# -P is ignored, must not over-block.
+expect_allowed "wget -P /tmp -O- URL (attached stdout)" \
+  "wget -P /tmp -O- https://example.com/file"
+expect_allowed "wget -P /tmp -O/dev/null URL (attached discard)" \
+  "wget -P /tmp -O/dev/null https://example.com/file"
+
 echo ""
