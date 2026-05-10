@@ -125,11 +125,37 @@ run_download_detectors() {
       _wpi=$((_wpi + 1))
     done
     if [ "$wget_pdir_active" -eq 1 ]; then
-      local wget_pdir
-      while IFS= read -r wget_pdir; do
-        [ -z "$wget_pdir" ] && continue
-        validate_command_path write "wget -P" "$wget_pdir"
-      done < <(extract_option_values "-P" "--directory-prefix" || true)
+      # Custom walker. extract_option_values misses the attached short
+      # form `-P/tmp` (Codex#2 bypass) — it only handles `-P VALUE`,
+      # `--directory-prefix VALUE`, and `--directory-prefix=VALUE`.
+      local _wpvi=1 _wpvn=${#CMD_TOKENS[@]}
+      while [ $_wpvi -lt $_wpvn ]; do
+        local _wpvtok
+        _wpvtok=$(strip_quotes "${CMD_TOKENS[$_wpvi]}")
+        local _wpval=""
+        local _wpv_consumed=0
+        case "$_wpvtok" in
+          --) break ;;
+          --directory-prefix=*)
+            _wpval="${_wpvtok#--directory-prefix=}" ;;
+          --directory-prefix|-P)
+            if [ $((_wpvi + 1)) -lt $_wpvn ]; then
+              _wpval=$(strip_quotes "${CMD_TOKENS[$((_wpvi + 1))]}")
+              _wpv_consumed=1
+            fi
+            ;;
+          -P?*)
+            _wpval="${_wpvtok#-P}" ;;
+        esac
+        if [ -n "$_wpval" ]; then
+          validate_command_path write "wget -P" "$_wpval"
+        fi
+        if [ $_wpv_consumed -eq 1 ]; then
+          _wpvi=$((_wpvi + 2))
+        else
+          _wpvi=$((_wpvi + 1))
+        fi
+      done
     fi
   fi
 }
