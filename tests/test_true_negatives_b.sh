@@ -788,3 +788,31 @@ expect_blocked 'psql --command="\copy mytable to /tmp/x.csv" (file still blocked
   "psql --command='\\copy mytable to /tmp/x.csv'"
 
 echo ""
+
+# ============================================================
+# curl --output-dir gated by -O / -o-relative
+# ------------------------------------------------------------
+# curl ignores --output-dir unless -O/--remote-name is set or
+# -o has a relative value. Plain GET to stdout, HEAD-only -I,
+# and -o /abs/path don't write into the prefix dir.
+# ============================================================
+echo "--- curl --output-dir without -O / relative -o (no FS write) ---"
+
+expect_allowed "curl --output-dir /tmp URL (plain GET, stdout)" \
+  "curl --output-dir /tmp https://example.com/file"
+expect_allowed "curl --output-dir /tmp -I URL (HEAD only)" \
+  "curl --output-dir /tmp -I https://example.com/file"
+expect_allowed "curl --output-dir /tmp -o /dev/null URL (absolute -o)" \
+  "curl --output-dir /tmp -o /dev/null https://example.com/file"
+expect_allowed "curl --output-dir /tmp -o <project>/x URL (absolute in-project -o)" \
+  "curl --output-dir /tmp -o $PROJECT/x https://example.com/file"
+
+# Active modes MUST still block.
+expect_blocked "curl --output-dir /tmp -O URL (still blocked)" \
+  "curl --output-dir /tmp -O https://example.com/file"
+expect_blocked "curl --output-dir /tmp -o file.txt URL (relative -o still blocked)" \
+  "curl --output-dir /tmp -o file.txt https://example.com/file"
+expect_blocked "curl --output-dir /tmp --remote-name URL (long form still blocked)" \
+  "curl --output-dir /tmp --remote-name https://example.com/file"
+
+echo ""

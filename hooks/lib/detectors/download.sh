@@ -31,11 +31,55 @@ run_download_detectors() {
     # The -o walker above only sees the explicit -o value, so
     # `curl --output-dir /tmp -O URL` and the attached `--output-dir=`
     # form bypassed the boundary entirely.
-    local curl_outdir
-    while IFS= read -r curl_outdir; do
-      [ -z "$curl_outdir" ] && continue
-      validate_command_path write "curl --output-dir" "$curl_outdir"
-    done < <(extract_option_values "" "--output-dir" || true)
+    #
+    # Gate: --output-dir is only used by curl when -O/--remote-name is
+    # present OR -o has a relative value. Without those, curl ignores
+    # --output-dir entirely (HEAD-only `-I`, `-o /abs/path`, plain GET
+    # to stdout, etc.). Validating unconditionally false-positived
+    # those cases.
+    local curl_outdir_active=0
+    local _coi=1 _con=${#CMD_TOKENS[@]}
+    while [ $_coi -lt $_con ]; do
+      local _cotok
+      _cotok=$(strip_quotes "${CMD_TOKENS[$_coi]}")
+      case "$_cotok" in
+        --) break ;;
+        -O|--remote-name|--remote-name-all)
+          curl_outdir_active=1; break ;;
+        -o|--output)
+          if [ $((_coi + 1)) -lt $_con ]; then
+            local _coval
+            _coval=$(strip_quotes "${CMD_TOKENS[$((_coi + 1))]}")
+            case "$_coval" in
+              /*) : ;;
+              *)  curl_outdir_active=1; break ;;
+            esac
+          fi
+          _coi=$((_coi + 2)); continue ;;
+        --output=*)
+          local _coval="${_cotok#--output=}"
+          case "$_coval" in
+            /*) : ;;
+            *)  curl_outdir_active=1; break ;;
+          esac
+          ;;
+        -o?*)
+          local _coval="${_cotok#-o}"
+          case "$_coval" in
+            /*) : ;;
+            *)  curl_outdir_active=1; break ;;
+          esac
+          ;;
+      esac
+      _coi=$((_coi + 1))
+    done
+    if [ "$curl_outdir_active" -eq 1 ]; then
+      local curl_outdir
+      while IFS= read -r curl_outdir; do
+        [ -z "$curl_outdir" ] && continue
+        validate_command_path write "curl --output-dir" "$curl_outdir"
+      done < <(extract_option_values "" "--output-dir" || true)
+    fi
   fi
 
   # --- wget -O / wget --output-document outside project ---
