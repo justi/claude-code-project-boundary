@@ -101,10 +101,35 @@ run_download_detectors() {
     # entirely (cd_destructive_walker comment at lib/cd_destructive_walker.sh
     # already flagged this gap for allowlisted-cwd, but the unguarded
     # in-project case was never wired up).
-    local wget_pdir
-    while IFS= read -r wget_pdir; do
-      [ -z "$wget_pdir" ] && continue
-      validate_command_path write "wget -P" "$wget_pdir"
-    done < <(extract_option_values "-P" "--directory-prefix" || true)
+    #
+    # Gate: -P is ignored by wget when --spider is set (no download)
+    # or when -O/--output-document is set (wget writes to the literal
+    # -O path, not into the prefix dir; the -O walker above already
+    # validates that path). Validating -P unconditionally
+    # false-positived these cases.
+    local wget_pdir_active=1
+    local _wpi=1 _wpn=${#CMD_TOKENS[@]}
+    while [ $_wpi -lt $_wpn ]; do
+      local _wptok
+      _wptok=$(strip_quotes "${CMD_TOKENS[$_wpi]}")
+      case "$_wptok" in
+        --) break ;;
+        --spider) wget_pdir_active=0; break ;;
+        -O|--output-document)
+          if [ $((_wpi + 1)) -lt $_wpn ]; then
+            wget_pdir_active=0; break
+          fi
+          ;;
+        --output-document=*) wget_pdir_active=0; break ;;
+      esac
+      _wpi=$((_wpi + 1))
+    done
+    if [ "$wget_pdir_active" -eq 1 ]; then
+      local wget_pdir
+      while IFS= read -r wget_pdir; do
+        [ -z "$wget_pdir" ] && continue
+        validate_command_path write "wget -P" "$wget_pdir"
+      done < <(extract_option_values "-P" "--directory-prefix" || true)
+    fi
   fi
 }

@@ -816,3 +816,29 @@ expect_blocked "curl --output-dir /tmp --remote-name URL (long form still blocke
   "curl --output-dir /tmp --remote-name https://example.com/file"
 
 echo ""
+
+# ============================================================
+# wget -P skipped when --spider or -O/--output-document set
+# ------------------------------------------------------------
+# wget ignores -P when --spider is on (no download) or when
+# -O/--output-document picks an explicit literal target (the
+# -O walker validates that path separately). Validating -P
+# unconditionally false-positived these.
+# ============================================================
+echo "--- wget -P with --spider / -O (no FS write into prefix) ---"
+
+expect_allowed "wget -P /tmp --spider URL" \
+  "wget -P /tmp --spider https://example.com/file"
+expect_allowed "wget -P /tmp -O - URL (stdout)" \
+  "wget -P /tmp -O - https://example.com/file"
+expect_allowed "wget --directory-prefix=/tmp --output-document=/dev/null URL" \
+  "wget --directory-prefix=/tmp --output-document=/dev/null https://example.com/file"
+
+# Plain -P (no override) MUST still block.
+expect_blocked "wget -P /tmp URL (plain still blocked)" \
+  "wget -P /tmp https://example.com/file"
+# -O outside-project caught by -O walker, not -P.
+expect_blocked "wget -P /tmp -O /etc/x URL (-O walker blocks)" \
+  "wget -P /tmp -O /etc/x https://example.com/file"
+
+echo ""
