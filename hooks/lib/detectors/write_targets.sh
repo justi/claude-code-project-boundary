@@ -474,11 +474,19 @@ run_write_target_detectors() {
         --) break ;;
         --list) cpio_listmode=1 ;;
         -*)
+          # Stop at value-bearing flags (cpio: -D dir, -F file,
+          # -H fmt, -R owner, -M msg, -O archive, -I archive,
+          # -K maxlen). Without the stop, `-D/tmp` would scan `t`
+          # from the path bytes and flip listmode incorrectly —
+          # same pre-pass bug fixed for unzip in sec 102.
           local _c_rest="${ctok#-}" _c_ch
           while [ -n "$_c_rest" ]; do
             _c_ch="${_c_rest:0:1}"
             _c_rest="${_c_rest:1}"
-            if [ "$_c_ch" = "t" ]; then cpio_listmode=1; fi
+            case "$_c_ch" in
+              D|F|H|R|M|O|I|K) break ;;
+              t) cpio_listmode=1 ;;
+            esac
           done
           ;;
       esac

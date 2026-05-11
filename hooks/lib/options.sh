@@ -55,9 +55,20 @@ extract_option_values() {
     local raw_tok="${CMD_TOKENS[$i]}"
     local tok
     tok=$(strip_quotes "$raw_tok")
-    if [ -n "$short" ] && [ "$tok" = "$short" ] && [ $((i + 1)) -lt $n ]; then
-      printf '%s\n' "${CMD_TOKENS[$((i + 1))]}"
-      found=0
+    if [ -n "$short" ]; then
+      if [ "$tok" = "$short" ] && [ $((i + 1)) -lt $n ]; then
+        printf '%s\n' "${CMD_TOKENS[$((i + 1))]}"
+        found=0
+      # Attached short form (sec 112): `-o<val>` / `-O<val>` /
+      # `-t<dir>` / `-D<dir>`. Previously missed — same shape gap
+      # that custom walkers fixed individually for unzip -d
+      # (sec 102) and wget -P (sec 104); closing it here covers
+      # every caller. `${short}?*` requires at least one char
+      # after the flag so bare `-o` doesn't accidentally match.
+      elif [[ "$tok" == "${short}"?* ]]; then
+        printf '%s\n' "${tok#$short}"
+        found=0
+      fi
     fi
     if [ -n "$long" ]; then
       if [ "$tok" = "$long" ] && [ $((i + 1)) -lt $n ]; then
