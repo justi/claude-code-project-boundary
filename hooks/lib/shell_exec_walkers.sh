@@ -197,8 +197,17 @@ block_pipe_to_shell() {
         # Informational-only flags exit before reading stdin or
         # executing user code — `bash --version` / `sh --help` are
         # not pipe-to-shell targets even when they appear as a
-        # standalone subcommand. Issue #33.
-        --version|--help|-V)
+        # standalone subcommand (issue #33).
+        #
+        # Codex sweep 4: `-V` is NOT safe across all shells —
+        # zsh and dash treat `-V` as the version flag but still
+        # read and execute stdin, so `curl URL | zsh -V` was a
+        # real pipe-to-shell bypass. bash and ksh reject `-V`
+        # as an unknown option (no stdin read), but the walker
+        # can't distinguish per-shell here. Drop `-V` from the
+        # whitelist entirely — only the long forms `--version`
+        # and `--help` are safe across the guarded shell set.
+        --version|--help)
           has_script=1; break ;;
         -*) continue ;;
         *) has_script=1; break ;;

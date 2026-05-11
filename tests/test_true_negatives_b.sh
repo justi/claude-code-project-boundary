@@ -893,9 +893,13 @@ echo ""
 # ------------------------------------------------------------
 # block_pipe_to_shell flagged any standalone shell with only
 # flags (no script positional). `bash --version`, `bash --help`,
-# `sh --version`, `bash -V` exit before reading stdin or
-# running user code, so they're never pipe-to-shell targets
-# even when they appear as a bare subcommand.
+# `sh --version` exit before reading stdin or running user
+# code, so they're never pipe-to-shell targets even when they
+# appear as a bare subcommand.
+#
+# Codex sweep 4 update: `-V` is NOT in the whitelist anymore —
+# zsh and dash treat -V as version-but-still-read-stdin.
+# See sec 111 in pentest_d.
 # ============================================================
 echo "--- bash/sh --version / --help (no pipe target) ---"
 
@@ -903,8 +907,6 @@ expect_allowed "bash --version (informational)" \
   "bash --version"
 expect_allowed "bash --help (informational)" \
   "bash --help"
-expect_allowed "bash -V (short version)" \
-  "bash -V"
 expect_allowed "sh --version (informational)" \
   "sh --version"
 expect_allowed "/bin/bash --version (absolute path)" \
