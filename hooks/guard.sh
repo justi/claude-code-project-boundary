@@ -73,18 +73,27 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "BLOCKED: 'jq' is required by the project-boundary hook shell but was not found on PATH. Install jq (brew install jq / apt install jq / scoop install jq / winget install jqlang.jq) and retry." >&2
   exit 2
 fi
-# Defense in depth (Codex sweep 4 #2): verify the `jq` on PATH
-# actually behaves like real jq. A hostile shim that returns empty
-# output for every query would otherwise produce COMMAND="" /
-# FILE_PATH="" below, and the guard would `exit 0` — silent bypass
-# for every Bash/Edit/Write call. The canonical query exercises
-# parsing, field access, and raw output mode; a shim that only
-# prints empty/static text cannot reproduce the "1" result without
-# implementing real jq grammar.
-if [ "$(echo '{"_pb_canary":1}' | jq -r '._pb_canary' 2>/dev/null)" != "1" ]; then
-  echo "BLOCKED: 'jq' on PATH does not behave like real jq (canary check failed). Cannot safely parse hook input — check PATH for a shim or reinstall jq." >&2
+# Defense in depth (Codex sweep 4 #2): the `command -v jq` check
+# above only confirms a binary named `jq` exists on PATH. A hostile
+# shim that returns empty output for every query would slip past it
+# and silently produce COMMAND="" / FILE_PATH="" below, making the
+# guard `exit 0` for every Bash/Edit/Write call.
+#
+# Randomised canary: build a JSON object whose key and value are
+# both bash $RANDOM at hook entry; require jq to echo the value
+# back through `.<key>`. A trivial pattern-match shim that just
+# prints "1" for an _pb_canary key cannot reproduce a per-invocation
+# random value. This is NOT bullet-proof — a shim that bundles real
+# jq still passes — but it raises the bar from "10-line shell shim"
+# to "ship a working jq parser", which is on par with the
+# user-controls-PATH attacker model the plugin operates under.
+_pb_canary_k="pbk${RANDOM}_${RANDOM}"
+_pb_canary_v="${RANDOM}-${RANDOM}-${RANDOM}"
+if [ "$(printf '{"%s":"%s"}' "$_pb_canary_k" "$_pb_canary_v" | jq -r ".$_pb_canary_k" 2>/dev/null)" != "$_pb_canary_v" ]; then
+  echo "BLOCKED: 'jq' on PATH does not behave like real jq (randomised canary check failed). Cannot safely parse hook input — check PATH for a shim or reinstall jq." >&2
   exit 2
 fi
+unset _pb_canary_k _pb_canary_v
 
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
@@ -157,10 +166,13 @@ fi
 # false-positive on a path-shaped string in a heredoc is preferred
 # over leaving the bypass open.
 #
-# On MSYS2 (cygpath available), bash's argv rewriting normally
-# converts these forms before guard sees them; per-token
-# pass-through under cygpath remains a follow-up. On Linux/macOS
-# (cygpath absent), fail-closed.
+# Linux/macOS (cygpath absent): fail-closed via the detection
+# branch — there is no legitimate Windows-shaped path token on
+# these platforms.
+# MSYS2/Cygwin (cygpath present): each detected token is rewritten
+# in place via `cygpath -u` so downstream walkers see normalised
+# POSIX paths and the boundary check rejects outside-project values
+# (sec 108 + per-token rewrite landed in 1ac00ae).
 if [ -n "$COMMAND" ]; then
   # Skip Windows-path detection for tools whose operands include
   # `host:path` / `container:path` shapes that visually collide with
