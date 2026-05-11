@@ -73,6 +73,18 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "BLOCKED: 'jq' is required by the project-boundary hook shell but was not found on PATH. Install jq (brew install jq / apt install jq / scoop install jq / winget install jqlang.jq) and retry." >&2
   exit 2
 fi
+# Defense in depth (Codex sweep 4 #2): verify the `jq` on PATH
+# actually behaves like real jq. A hostile shim that returns empty
+# output for every query would otherwise produce COMMAND="" /
+# FILE_PATH="" below, and the guard would `exit 0` — silent bypass
+# for every Bash/Edit/Write call. The canonical query exercises
+# parsing, field access, and raw output mode; a shim that only
+# prints empty/static text cannot reproduce the "1" result without
+# implementing real jq grammar.
+if [ "$(echo '{"_pb_canary":1}' | jq -r '._pb_canary' 2>/dev/null)" != "1" ]; then
+  echo "BLOCKED: 'jq' on PATH does not behave like real jq (canary check failed). Cannot safely parse hook input — check PATH for a shim or reinstall jq." >&2
+  exit 2
+fi
 
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
