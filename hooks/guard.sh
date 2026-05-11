@@ -186,6 +186,23 @@ if [ -n "$COMMAND" ]; then
           echo "BLOCKED: command contains a Windows-native path token but cygpath is not available; cannot reliably enforce the project boundary. Pass POSIX paths or install cygpath (MSYS2/Cygwin)." >&2
           exit 2
         fi
+        # cygpath present (MSYS2/Cygwin shell): rewrite each
+        # Windows-shaped token to POSIX form so downstream walkers
+        # see normalized paths. Without this, on MSYS2 the
+        # walkers treated `C:\Users\foo` as project-relative and
+        # produced an in-project-looking path that passed the
+        # boundary check (Codex sweep 4 #3 / issue #34).
+        while IFS= read -r _pb_winpath; do
+          [ -z "$_pb_winpath" ] && continue
+          _pb_posix=$(cygpath -u "$_pb_winpath" 2>/dev/null)
+          [ -z "$_pb_posix" ] && continue
+          # Bash native replacement; quoting guards against glob
+          # interpretation of literal `\` / `/` in winpath.
+          COMMAND="${COMMAND//"$_pb_winpath"/"$_pb_posix"}"
+        done < <(echo "$COMMAND" \
+          | grep -oE "([A-Za-z]:[\\\\/][^[:space:]\"'<>|&;()=]*|\\\\\\\\[^[:space:]\"'<>|&;()=]+)" \
+          | sort -u)
+        unset _pb_winpath _pb_posix
       fi
       ;;
   esac
