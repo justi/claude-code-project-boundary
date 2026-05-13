@@ -92,16 +92,42 @@ if ! command -v cygpath >/dev/null 2>&1; then
 else
   _jct_name="ntfs_jct_escape"
   _jct_posix="$PROJECT/$_jct_name"
-  _jct_win=$(cygpath -w "$_jct_posix")
+  _jct_win=$(cygpath -wa "$_jct_posix")
   _jct_target_win='C:\Windows'
 
-  # Pre-clean any stale junction from a previous run.
-  cmd.exe //c "if exist \"$_jct_win\" rmdir \"$_jct_win\"" >/dev/null 2>&1 || true
-  cmd.exe //c "mklink /J \"$_jct_win\" \"$_jct_target_win\"" >/dev/null 2>&1 || true
+  echo "diag: PROJECT=$PROJECT"
+  echo "diag: junction POSIX=$_jct_posix"
+  echo "diag: junction Windows=$_jct_win"
+  echo "diag: cmd.exe=$(command -v cmd.exe || echo absent)"
+  echo "diag: powershell.exe=$(command -v powershell.exe || echo absent)"
+  echo "diag: fsutil.exe=$(command -v fsutil.exe || echo absent)"
+
+  # Pre-clean any stale junction from a previous run via PowerShell
+  # (avoids MSYS2 path translation of `//c` and `\` in cmd.exe args).
+  if [ -d "$_jct_posix" ]; then
+    powershell.exe -NoProfile -Command "Remove-Item -LiteralPath '$_jct_win' -Force -Recurse -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
+  fi
+
+  # Try PowerShell New-Item -ItemType Junction first (modern API,
+  # no cmd.exe escaping headaches). Falls back to cmd.exe /c mklink
+  # with MSYS_NO_PATHCONV=1 to disable MSYS2 path translation.
+  _mk_out=$(powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path '$_jct_win' -Target '$_jct_target_win' -Force 2>&1 | Out-String" 2>&1)
+  echo "diag: PowerShell New-Item Junction -> $_mk_out"
 
   if [ ! -d "$_jct_posix" ]; then
-    echo "SKIP: junction creation failed (mklink /J unavailable?)"
+    echo "diag: PS junction failed, trying cmd.exe /c mklink /J"
+    _mk_out=$(MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' cmd.exe /c "mklink /J $_jct_win $_jct_target_win" 2>&1 || true)
+    echo "diag: cmd mklink -> $_mk_out"
+  fi
+
+  if [ ! -d "$_jct_posix" ]; then
+    echo "SKIP: junction creation failed via both PowerShell and cmd.exe"
   else
+    echo "diag: junction created OK, ls -la $_jct_posix:"
+    ls -la "$_jct_posix" 2>&1 | head -3
+    echo "diag: fsutil reparsepoint query result:"
+    fsutil.exe reparsepoint query "$_jct_win" 2>&1 | head -5
+
     expect_file_blocked "Edit through NTFS junction (project/junk -> C:\\Windows)" \
       "$_jct_posix/notepad.exe"
     expect_blocked "tee through NTFS junction (project/junk/test.txt)" \
@@ -110,7 +136,7 @@ else
       "rm $_jct_posix/explorer.exe"
 
     # Cleanup so we don't leave a junction in the project tmp tree.
-    cmd.exe //c "rmdir \"$_jct_win\"" >/dev/null 2>&1 || true
+    powershell.exe -NoProfile -Command "Remove-Item -LiteralPath '$_jct_win' -Force -Recurse -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
   fi
 fi
 
