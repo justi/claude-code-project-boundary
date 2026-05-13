@@ -75,4 +75,43 @@ expect_blocked "rm C:/Windows/System32/config/sam (forward slash unquoted)" \
 expect_blocked "echo x > C:\\Users\\foo\\test.txt (redirect, backslash)" \
   'echo x > C:\Users\foo\test.txt'
 
+echo ""
+echo "--- #31 NTFS junction / reparse-point bypass ---"
+
+# Junctions (mklink /J) are NTFS reparse points, not POSIX symlinks.
+# MSYS2 readlink returns nothing for them, so the symlink-chase loop
+# in guard.sh skips them. An in-project junction pointing OUTSIDE the
+# project lets writes land at the outside target while the boundary
+# check sees only the in-project path.
+#
+# Junction creation does NOT require admin (unlike `mklink /D`), so
+# this runs on a stock GHA windows-latest runner.
+
+if ! command -v cygpath >/dev/null 2>&1; then
+  echo "SKIP: not a Windows MSYS2 runner (no cygpath)"
+else
+  _jct_name="ntfs_jct_escape"
+  _jct_posix="$PROJECT/$_jct_name"
+  _jct_win=$(cygpath -w "$_jct_posix")
+  _jct_target_win='C:\Windows'
+
+  # Pre-clean any stale junction from a previous run.
+  cmd.exe //c "if exist \"$_jct_win\" rmdir \"$_jct_win\"" >/dev/null 2>&1 || true
+  cmd.exe //c "mklink /J \"$_jct_win\" \"$_jct_target_win\"" >/dev/null 2>&1 || true
+
+  if [ ! -d "$_jct_posix" ]; then
+    echo "SKIP: junction creation failed (mklink /J unavailable?)"
+  else
+    expect_file_blocked "Edit through NTFS junction (project/junk -> C:\\Windows)" \
+      "$_jct_posix/notepad.exe"
+    expect_blocked "tee through NTFS junction (project/junk/test.txt)" \
+      "tee $_jct_posix/test.txt"
+    expect_blocked "rm through NTFS junction" \
+      "rm $_jct_posix/explorer.exe"
+
+    # Cleanup so we don't leave a junction in the project tmp tree.
+    cmd.exe //c "rmdir \"$_jct_win\"" >/dev/null 2>&1 || true
+  fi
+fi
+
 print_summary
