@@ -84,6 +84,17 @@ run_write_target_detectors() {
             validate_command_path strict "install --target-directory" "${install_tok#*=}"
             continue
           fi
+          # Attached short `-t<dir>` (Codex sweep 5 Q4): the
+          # generic `-*` skip below treated this as a plain flag,
+          # so `install -t/tmp src.txt dst.txt` slipped past the
+          # boundary entirely. Split form `install -t /tmp src`
+          # already blocks because the next-token positional walk
+          # validates `/tmp` as a target; only the attached form
+          # needs explicit handling here.
+          if [[ "$install_tok" == -t?* ]]; then
+            validate_command_path strict "install -t" "${install_tok#-t}"
+            continue
+          fi
           case "$install_tok" in
             -m|--mode|-o|--owner|-g|--group)
               install_skip_next=1 ;;
