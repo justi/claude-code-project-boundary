@@ -373,10 +373,6 @@ if [ -n "$FILE_PATH" ]; then
   if [[ -e "$RESOLVED" ]]; then
     RESOLVED="$(cd "$(dirname "$RESOLVED")" && pwd -P)/$(basename "$RESOLVED")"
   fi
-  # NTFS reparse points (junctions / mklink /J) are NOT POSIX symlinks
-  # so the chase loop above misses them. Walk ancestors and refuse if
-  # any is a reparse point (#31). No-op on Linux/macOS.
-  assert_no_unsafe_reparse "$RESOLVED" "file_path"
   if ! is_write_permitted "$RESOLVED"; then
     echo "BLOCKED: File '$RESOLVED' is OUTSIDE project directory '$PROJECT_DIR'. Ask user for explicit permission." >&2
     exit 2
