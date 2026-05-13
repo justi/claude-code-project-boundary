@@ -38,7 +38,10 @@ run_write_target_detectors() {
   # is the actual command-name token.
   if command_name_is install; then
     local install_raw
-    install_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//' || true)
+    # Scan CMD_BLANKED (heredoc-body wiped) so a quoted heredoc whose
+    # body mentions `install /etc/x` doesn't false-fire (issue #20,
+    # same shape as sec 99 for rm/tee).
+    install_raw=$(echo "$CMD_BLANKED" | grep -oE '(^|[[:space:]])install[[:space:]]+.*' | sed 's/^[[:space:]]*install[[:space:]]*//' || true)
     # Skip the next token when the current one is a value-bearing flag
     # (-m/--mode, -o/--owner, -g/--group). An earlier walker skipped
     # tokens matching mode regex ^[0-9]+$ or owner[:group] regex
@@ -145,7 +148,9 @@ run_write_target_detectors() {
   # --- rsync command: check all non-flag path arguments ---
   if command_name_is "rsync"; then
     local rsync_raw
-    rsync_raw=$(echo "$CMD" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//' || true)
+    # Scan CMD_BLANKED so heredoc bodies mentioning `rsync /etc/foo`
+    # don't false-fire (issue #20).
+    rsync_raw=$(echo "$CMD_BLANKED" | grep -oE '(^|[[:space:]])rsync[[:space:]]+.*' | sed 's/^[[:space:]]*rsync[[:space:]]*//' || true)
 
     # Pre-pass: detect dry-run. With --dry-run / -n rsync simulates
     # the transfer and does NOT write to the destination, so the
@@ -254,10 +259,13 @@ run_write_target_detectors() {
   # KEEP the prior block — preserves coverage of any tar invocation
   # whose mode this walker didn't classify.
   if command_name_is "tar"; then
-    local tar_mode="" tar_writes_archive=0 ti=1 tn=${#CMD_TOKENS[@]}
+    # Use CMD_TOKENS_SCAN (heredoc-body wiped) so a quoted heredoc
+    # whose body mentions `tar -xf x -C /etc/foo` doesn't fool the
+    # mode pre-pass or the -C / -f validation passes (issue #20).
+    local tar_mode="" tar_writes_archive=0 ti=1 tn=${#CMD_TOKENS_SCAN[@]}
     while [ $ti -lt $tn ] && [ -z "$tar_mode" ]; do
       local mtok
-      mtok=$(strip_quotes "${CMD_TOKENS[$ti]}")
+      mtok=$(strip_quotes "${CMD_TOKENS_SCAN[$ti]}")
       case "$mtok" in
         --extract|--get)
           tar_mode=extract ;;
@@ -291,11 +299,11 @@ run_write_target_detectors() {
       ti=0
       while [ $ti -lt $tn ]; do
         local ttok
-        ttok=$(strip_quotes "${CMD_TOKENS[$ti]}")
+        ttok=$(strip_quotes "${CMD_TOKENS_SCAN[$ti]}")
         local tar_dir=""
         if [ "$ttok" = "-C" ] || [ "$ttok" = "--directory" ]; then
           if [ $((ti + 1)) -lt $tn ]; then
-            tar_dir="${CMD_TOKENS[$((ti + 1))]}"
+            tar_dir="${CMD_TOKENS_SCAN[$((ti + 1))]}"
             ti=$((ti + 2))
           else
             ti=$((ti + 1))
@@ -321,7 +329,7 @@ run_write_target_detectors() {
       local _tfi=1
       while [ $_tfi -lt $tn ]; do
         local _tftok
-        _tftok=$(strip_quotes "${CMD_TOKENS[$_tfi]}")
+        _tftok=$(strip_quotes "${CMD_TOKENS_SCAN[$_tfi]}")
         local _tfval="" _tf_consumed=0
         case "$_tftok" in
           --) break ;;
@@ -329,7 +337,7 @@ run_write_target_detectors() {
             _tfval="${_tftok#--file=}" ;;
           --file)
             if [ $((_tfi + 1)) -lt $tn ]; then
-              _tfval=$(strip_quotes "${CMD_TOKENS[$((_tfi + 1))]}")
+              _tfval=$(strip_quotes "${CMD_TOKENS_SCAN[$((_tfi + 1))]}")
               _tf_consumed=1
             fi
             ;;
@@ -348,7 +356,7 @@ run_write_target_detectors() {
               _tfpos=$((_tfpos + 1))
             done
             if [ $_tff_seen -eq 1 ] && [ $((_tfi + 1)) -lt $tn ]; then
-              _tfval=$(strip_quotes "${CMD_TOKENS[$((_tfi + 1))]}")
+              _tfval=$(strip_quotes "${CMD_TOKENS_SCAN[$((_tfi + 1))]}")
               _tf_consumed=1
             fi
             ;;
@@ -377,10 +385,13 @@ run_write_target_detectors() {
   # In these modes -d is either ignored or has unrelated semantics.
   # Skip the walker so `unzip -l archive.zip -d /tmp` doesn't false-fire.
   if command_name_is "unzip"; then
-    local unzip_readonly=0 ui=1 un=${#CMD_TOKENS[@]}
+    # Scan heredoc-body-blanked tokens (issue #20) so a quoted
+    # heredoc whose body mentions `unzip ... -d /etc` doesn't
+    # false-fire.
+    local unzip_readonly=0 ui=1 un=${#CMD_TOKENS_SCAN[@]}
     while [ $ui -lt $un ]; do
       local utok
-      utok=$(strip_quotes "${CMD_TOKENS[$ui]}")
+      utok=$(strip_quotes "${CMD_TOKENS_SCAN[$ui]}")
       case "$utok" in
         --) break ;;
         -*)
@@ -412,10 +423,10 @@ run_write_target_detectors() {
       #   -do/tmp          d mid-cluster, attached value (rest after d)
       # extract_option_values' coverage gap was a real bypass, not a
       # FP4 regression — predates this walker.
-      local di=1 dn=${#CMD_TOKENS[@]}
+      local di=1 dn=${#CMD_TOKENS_SCAN[@]}
       while [ $di -lt $dn ]; do
         local dtok
-        dtok=$(strip_quotes "${CMD_TOKENS[$di]}")
+        dtok=$(strip_quotes "${CMD_TOKENS_SCAN[$di]}")
         local dval=""
         local _consumed_next=0
         case "$dtok" in
@@ -435,7 +446,7 @@ run_write_target_detectors() {
               if [ -n "$_after" ]; then
                 dval="$_after"
               elif [ $((di + 1)) -lt $dn ]; then
-                dval=$(strip_quotes "${CMD_TOKENS[$((di + 1))]}")
+                dval=$(strip_quotes "${CMD_TOKENS_SCAN[$((di + 1))]}")
                 _consumed_next=1
               fi
             fi
@@ -466,10 +477,11 @@ run_write_target_detectors() {
   # -D. This patch only addresses the `-t` (list) FP; other modes
   # keep current behavior (write policy + allowlist).
   if command_name_is "cpio"; then
-    local cpio_listmode=0 ci=1 cn=${#CMD_TOKENS[@]}
+    # Scan heredoc-body-blanked tokens (issue #20).
+    local cpio_listmode=0 ci=1 cn=${#CMD_TOKENS_SCAN[@]}
     while [ $ci -lt $cn ]; do
       local ctok
-      ctok=$(strip_quotes "${CMD_TOKENS[$ci]}")
+      ctok=$(strip_quotes "${CMD_TOKENS_SCAN[$ci]}")
       case "$ctok" in
         --) break ;;
         --list) cpio_listmode=1 ;;
@@ -497,7 +509,7 @@ run_write_target_detectors() {
       while IFS= read -r cpio_dir; do
         [ -z "$cpio_dir" ] && continue
         validate_command_path write "cpio -D" "$cpio_dir"
-      done < <(extract_option_values "-D" "" || true)
+      done < <(extract_attached_or_split_from CMD_TOKENS_SCAN -D "" || true)
     fi
   fi
 
