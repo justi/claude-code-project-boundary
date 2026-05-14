@@ -29,6 +29,7 @@ Allows destructive operations **within your project** but blocks them **outside*
 | `rsync` (source, destination, `--log-file=`, `--partial-dir=`, `--backup-dir=`, `--temp-dir=`, `--write-batch=`, `--only-write-batch=`) | Allowed | **Blocked** |
 | `tar -C` / `--directory=` | Allowed | **Blocked** |
 | `unzip -d` / `cpio -D` | Allowed | **Blocked** |
+| `7z -o<dir>` / `7z -w<dir>` (extract verbs only) | Allowed | **Blocked** |
 | **Edit** tool (file edits) | Allowed | **Blocked** |
 | **MultiEdit** tool (multi-file edits) | Allowed | **Blocked** |
 | **Write** tool (file creation) | Allowed | **Blocked** |
@@ -60,6 +61,9 @@ Allows destructive operations **within your project** but blocks them **outside*
 - **Symlink resolution** — handles macOS `/var` → `/private/var`, dereferences symlink chains in Edit/Write/MultiEdit (fail-closed after 20 hops)
 - **`/dev/null` bit-bucket** — `curl -o /dev/null`, `2>/dev/null`, `tee /dev/null`, `dd of=/dev/null`, and all redirect target forms are allowed so routine probe and silencing workflows don't hit the boundary. Narrow exemption: the discard-only walkers short-circuit *before* `is_write_permitted`; `sed -i /dev/null`, `truncate /dev/null`, and `cp|mv|ln ... /dev/null` remain blocked because each performs a real filesystem write under `/dev/`.
 - **POSIX `--` end-of-options** — `install`, `rsync`, `sed -i`, and `truncate` continue parsing operands after a literal `--`, so `rsync … -- -outside/file` and similar dash-prefixed targets are validated rather than silently skipped as flags.
+- **Windows-native path tokens in COMMAND** — `tee C:\Windows\System32\…`, `rm C:/Users/x/.ssh/id_rsa`, redirects to drive-letter paths and UNC `\\server\share\…` are rewritten per-token via `cygpath -u` (MSYS2) before walkers run, then the boundary check rejects them. On non-MSYS2 shells Windows-shape tokens fail closed because they don't match the POSIX absolute-path pattern.
+- **`jq` behaviour canary** — the hook entry challenges `jq` with a randomised key/value JSON object on every invocation. A hostile shim that returns canned output (`jq() { echo ""; }`) cannot reproduce a per-call random value and the hook blocks, so the parser used to extract `tool_input` is provably real `jq`.
+- **NTFS reparse-point traversal** — junctions (`mklink /J`) and symbolic links (`mklink /D`) inside the project are followed to their physical target by `cd -P` (MSYS2 implements it via Win32 `SetCurrentDirectory`), so `project/escape -> C:\Windows` resolves to `/c/Windows` and writes through it are blocked. Regression-anchored on the Windows-smoke job.
 
 ### Path allowlist (`hooks/allowlist.conf`)
 
@@ -141,7 +145,7 @@ Pure-bash PreToolUse hooks for Bash, Edit, MultiEdit, and Write tools. The Bash 
 bash tests/test_guard.sh
 ```
 
-Full test suite covering all guard scenarios. CI runs on Ubuntu and macOS.
+Full test suite covering all guard scenarios. CI runs on Ubuntu, macOS, and Windows (MSYS2 smoke job — minimal end-to-end coverage of Windows-native path handling and the NTFS reparse-point regression anchor).
 
 ## License
 

@@ -5,6 +5,31 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.10.0] — 2026-05-14
+
+### Added — platform & defense-in-depth
+
+- **Windows-smoke CI job** (#29) on `windows-latest` under MSYS2 bash. Runs a minimal end-to-end smoke covering Windows-native path handling (`C:\…`, `C:/…`, UNC `\\server\share`), informational shell flags (`bash --version`, `sh --version`), and the NTFS junction regression anchor.
+- **`jq` behaviour canary** at hook entry (#32 hardening). The hook challenges `jq` on every invocation with a randomised key/value JSON object and requires the value echoed back through `.<key>`. A trivial shim (`jq() { echo ""; }`) cannot reproduce a per-call random value, so the parser used to extract `tool_input` is provably real `jq`. Pairs with the existing hard-dep check that fails closed when `jq` is absent.
+- **Per-token Windows path rewrite in COMMAND** (#34 / sec 108–110). `tee C:\Windows\…`, `rm C:/Users/x/.ssh/id_rsa`, redirects to drive-letter paths, quoted forms, and UNC `\\server\share\…` are rewritten per-token via `cygpath -u` (MSYS2) before walkers run. On non-MSYS2 shells these shapes fail closed because they don't match the POSIX absolute-path pattern.
+- **NTFS reparse-point regression anchor** (#31 close). Junctions and symbolic links inside the project are traversed to their physical target by `cd -P` in `resolve_path` — MSYS2 implements it via Win32 `SetCurrentDirectory` which follows reparse points. Anchored by 3 expect_blocked tests in `tests/test_windows_smoke.sh` (PowerShell `New-Item -ItemType Junction` creation, `fsutil reparsepoint query` confirmation).
+
+### Security — closed bypass categories
+
+- **sec 108 / sec 110 — Windows-native path tokens in Bash COMMAND.** `echo x > C:\Users\foo\test.txt`, quoted forms (`tee 'C:\…'`, `tee "C:/…"`), and forward-slash drive paths slipped past walkers because the POSIX `[[ != /* ]]` test treated them as relative. Per-token cygpath rewrite at the COMMAND-token boundary (commit `1ac00ae`) covers all attached and quoted shapes.
+- **sec 109 — `file_path` drive-relative and `file://` URI.** Edit / Write / MultiEdit input `C:foo` (drive-relative without slash) and `file:///etc/passwd` no longer slip past the normalization branch. The drive-relative shape carries an accepted false-positive risk for POSIX files literally named `c:something` — rare in practice.
+- **sec 111 — `-V` flag whitelist removed from pipe-to-shell.** The informational-flag whitelist that exempts `--help` / `--version` was too generous: `-V` is a real subcommand verb on tools that take piped script input. Codex sweep 4 #1.
+- **sec 112 — `extract_option_values` attached short `-X<val>`.** The library helper matched `-X VAL` (split short) and `--long=VAL` (attached long) but missed `-X<val>` (attached short), so any walker delegating to it lost coverage for that shape. Cross-tool fix in `hooks/lib/options.sh`.
+- **sec 113 — install / rsync / unzip / cpio walkers read `CMD_BLANKED`** (#20). Quoted heredoc bodies mentioning a write-flag (`<<'EOF' … unzip x -d /etc/dst … EOF`) false-positived because the walkers grep'd raw `CMD`. Switching to `CMD_BLANKED` / `CMD_TOKENS_SCAN` (heredoc-body wiped) mirrors the sec 99 fix shape used for rm/tee.
+- **sec 114 — `install -t<dir>` attached short bypass** (Codex sweep 5 Q4). The install walker's in-line flag-skip loop discarded every `-*` token except `--target-directory=`; `install -t/tmp src dst` fell into the generic skip branch and never reached the boundary check.
+
+### Tests & quality
+
+- **Anti-facade skill v2.1.0 dogfooded.** F10 empirical execution requirement (run `git stash` + test, capture exit code) caught a candidate fix (sec 115 — NTFS reparse-point bypass) defending against a non-existing bypass. Pre-fix CI run on the revert branch demonstrated all 3 junction expect_blocked assertions already PASS — protection comes from `cd -P` in `resolve_path`, not from the proposed helper. Fix reverted (commit `8c2cecc`), tests kept as regression-anchor, lesson recorded in the skill's missed-bug log.
+- **External Codex verification** of the sec 112–114 cluster surfaced 2 LOW findings the in-session audit missed: coverage gap in tar/zip heredoc-body tests (closed in `2ab4c75`) and structural parallel-walker maintenance risk in install/rsync (logged, not exploitable).
+- Suite total: **1583 / 1583 green** on Linux/macOS (up from 1444 baseline → +139); windows-smoke job **15 / 15 green** (12 baseline → +3 junction).
+- Issue #30 (lib/paths.sh + tokenize.sh Windows path-shape audit) closed as won't fix — design choice is "validate at the entry boundary"; helpers fail-closed on garbage paths.
+
 ## [1.9.0] — 2026-05-03
 
 ### Fixed — closes issue #21 (remote-dispatch false positives)
