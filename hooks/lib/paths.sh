@@ -59,6 +59,13 @@ resolve_path() {
     # resolves to `/etc`. This is essential: if left unresolved, the
     # subsequent lexical `..` pass would incorrectly pop `linkdir` and
     # leave the caller inside the allowlisted dir.
+    # On MSYS2, `cd -P` is also the load-bearing NTFS reparse-point
+    # protection (#31): Win32 SetCurrentDirectory traverses junctions
+    # and symbolic links, so `pwd -P` returns the physical target —
+    # an in-project junction -> C:\Windows resolves to /c/Windows here
+    # before is_write_permitted runs. The dedicated readlink-based
+    # symlink-chase loop in guard.sh / below is irrelevant for NTFS
+    # reparse points (readlink returns nothing for junctions).
     local real_ancestor
     real_ancestor=$(cd -P "$check" && pwd -P)
     combined="${real_ancestor}${tail}"
@@ -340,47 +347,11 @@ block_unless_path_allowed() {
   exit 2
 }
 
-# --- Refuse paths that traverse an NTFS reparse point ---
-# On Windows MSYS2, `mklink /J` directory junctions (and `mklink /D`
-# symbolic links created without SeCreateSymbolicLink privilege) are
-# NTFS reparse points, NOT POSIX symlinks. `readlink` returns nothing
-# for them and `[[ -L ... ]]` is FALSE, so the symlink-chase loops in
-# guard.sh / resolve_path skip them. An in-project junction pointing
-# outside the project (e.g. `project/junk -> C:\Windows`) silently
-# bypasses the boundary check otherwise.
-#
-# Walks PATH upward toward filesystem root, checks each existing
-# component via `fsutil.exe reparsepoint query`. First reparse-point
-# hit → BLOCKED + exit 2 (fail-closed: refuse to resolve, don't try
-# to chase the NTFS target).
-#
-# Linux/macOS: cygpath/fsutil absent → returns silently, zero cost.
-assert_no_unsafe_reparse() {
-  local path="$1" label="$2"
-  command -v cygpath >/dev/null 2>&1 || return 0
-  command -v fsutil.exe >/dev/null 2>&1 || return 0
-  local cur="$path"
-  while [ -n "$cur" ] && [ "$cur" != "/" ] && [ "$cur" != "." ]; do
-    if [ -e "$cur" ]; then
-      local _win
-      _win=$(cygpath -wa "$cur" 2>/dev/null || true)
-      if [ -n "$_win" ]; then
-        if fsutil.exe reparsepoint query "$_win" 2>/dev/null | grep -q "Reparse Tag Value"; then
-          echo "BLOCKED: '$label' traverses an NTFS reparse point at '$cur' (junction or symlink). Ask user for explicit permission." >&2
-          exit 2
-        fi
-      fi
-    fi
-    cur=$(dirname "$cur")
-  done
-}
-
 # validate_command_path POLICY LABEL RAW_PATH
 # Convenience wrapper: resolve + check in one call. Most call-sites
 # only need this single helper.
 validate_command_path() {
   local resolved
   resolved=$(resolve_command_path "$3")
-  assert_no_unsafe_reparse "$resolved" "$2"
   block_unless_path_allowed "$1" "$2" "$resolved"
 }

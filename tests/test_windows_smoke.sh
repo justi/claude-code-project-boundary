@@ -76,13 +76,21 @@ expect_blocked "echo x > C:\\Users\\foo\\test.txt (redirect, backslash)" \
   'echo x > C:\Users\foo\test.txt'
 
 echo ""
-echo "--- #31 NTFS junction / reparse-point bypass ---"
+echo "--- #31 NTFS junction regression anchor ---"
 
-# Junctions (mklink /J) are NTFS reparse points, not POSIX symlinks.
-# MSYS2 readlink returns nothing for them, so the symlink-chase loop
-# in guard.sh skips them. An in-project junction pointing OUTSIDE the
-# project lets writes land at the outside target while the boundary
-# check sees only the in-project path.
+# Regression-anchor for #31. NTFS junctions (mklink /J) are reparse
+# points; `readlink` returns nothing and `[[ -L ]]` is FALSE for them,
+# so the symlink-chase loop in guard.sh skips them entirely. The
+# protection comes from one level up: `cd -P` in resolve_path
+# (lib/paths.sh) is implemented by MSYS2 via Win32 SetCurrentDirectory,
+# which DOES traverse reparse points. `pwd -P` then returns the
+# physical target, so an in-project junction -> C:\Windows resolves
+# to /c/Windows before is_write_permitted runs.
+#
+# Empirically confirmed pre-fix on PR #35 (run 25831235040): all 3
+# assertions PASS without any reparse-point detection code. F10
+# verification proved sec 115 was defending against a non-existing
+# bypass — it was reverted.
 #
 # Junction creation does NOT require admin (unlike `mklink /D`), so
 # this runs on a stock GHA windows-latest runner.
