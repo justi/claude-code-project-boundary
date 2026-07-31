@@ -428,7 +428,17 @@ block_shell_script_execution() {
     echo "BLOCKED: Script symlink chain too deep or circular at '$exec_resolved'. Ask user for explicit permission." >&2
     exit 2
   fi
-  if [[ "$exec_resolved/" != "$PROJECT_DIR/"* ]]; then
+  # Narrow, explicit exception: Claude Code skill helper scripts under
+  # ~/.claude/skills/ are execute-only exempt (never create/write - the
+  # Write/Edit/MultiEdit hooks below still block writes outside
+  # PROJECT_DIR, so nothing new can land here through Claude's own tool
+  # calls). User-requested to unblock trusted, already-installed skill
+  # scripts (e.g. reader-knowledge-audit's render-report.py, the
+  # rka-loop arm/disarm scripts) without opening execute for arbitrary
+  # outside-project paths.
+  if [[ "$exec_resolved" == "$_ALLOWLIST_HOME/.claude/skills/"* && ( "$exec_resolved" == *.py || "$exec_resolved" == *.sh ) ]]; then
+    : # allowed - see comment above
+  elif [[ "$exec_resolved/" != "$PROJECT_DIR/"* ]]; then
     echo "BLOCKED: Executing script '$exec_resolved' is OUTSIDE project directory '$PROJECT_DIR'. Allowlist does not cover execute. Ask user for explicit permission." >&2
     exit 2
   fi
