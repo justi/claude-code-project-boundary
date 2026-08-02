@@ -5,6 +5,12 @@ All notable changes to this plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.11.0] — 2026-08-02
+
+### Added — narrow execute exception for Claude Code skill scripts
+
+- **`.py` / `.sh` helper scripts under `~/.claude/skills/` are now execute-only exempt** from the strict outside-project execute block in `block_shell_script_execution`. Skills that ship helper scripts (e.g. reader-knowledge-audit's `render-report.py`, reader-knowledge-audit-loop-hook's `arm.sh`) were previously unusable from any project other than the one the skill happened to be developed in, since the exec walker has no allowlist by design (an execute-allowlisted write dir would become an RCE escape hatch). The exception is scoped tightly to `~/.claude/skills/**/*.py` and `~/.claude/skills/**/*.sh` and covers execute only — the Write/Edit/MultiEdit hooks still block any write to that path, so nothing new can land there through Claude's own tool calls.
+
 ## [1.10.0] — 2026-05-14
 
 ### Added — platform & defense-in-depth
